@@ -1,1 +1,112 @@
+---
+title: "P3F_ChIP_6hpf_byJack"
+author: "Jack Kucinski"
+date: "March 17, 2023"
+output: html_document
+---
 
+#Title P3F_ChIP_6hpf_byJack
+
+## Goals: 
+To analyze my first publishable ChIP-seq datasets in parallel with Matt Cannon to gain bioinformatics skills
+
+##Samples
+JPK0028	GSL-JK-3260 EID1602 P3F anti-FOXO1 ChIP 1
+JPK0029	GSL-JK-3260 EID1602 P3F anti-FOXO1 Input 1
+JPK0030	GSL-JK-3260 EID1602 CNTL anti-FOXO1 ChIP 1
+JPK0031	GSL-JK-3260 EID1602 CNTL anti-FOXO1 Input 1
+JPK0032	GSL-JK-3260 EID1622 P3F anti-FOXO1 ChIP 2
+JPK0033	GSL-JK-3260 EID1622 P3F anti-FOXO1 Input 2
+JPK0034	GSL-JK-3260 EID1622 CNTL anti-FOXO1 ChIP 2
+JPK0035	GSL-JK-3260 EID1622 CNTL anti-FOXO1 Input 2
+JPK0036	GSL-JK-3260 EID1776 P3F anti-H3K27Ac ChIP 1
+JPK0037	GSL-JK-3260 EID1776 P3F anti-H3K27Ac Input 1
+JPK0038	GSL-JK-3260 EID1776 CNTL anti-H3K27Ac ChIP 1 
+JPK0039	GSL-JK-3260 EID1776 CNTL anti-H3K27Ac Input 1 
+JPK0040	GSL-JK-3260 EID1777 P3F anti-H3K27Ac ChIP 2
+JPK0041	GSL-JK-3260 EID1777 P3F anti-H3K27Ac Input 2 
+JPK0042	GSL-JK-3260 EID1777 CNTL anti-H3K27Ac ChIP 2 
+JPK0043	GSL-JK-3260 EID1777 CNTL anti-H3K27Ac Input 2 
+
+#Workflow
+
+##Align libraries to zebrafish genome, index, and remove duplicates
+```{bash}
+set -e
+echo ${HOSTNAME} ${SLURM_ARRAY_TASK_ID}
+
+module purge
+module load GCC/9.3.0 \
+            GCCcore/9.3.0 \
+            HISAT2/2.2.1 \
+            SAMtools/1.15
+
+fileArray=($(ls /home/gdkendalllab/lab/raw_data/fastq/2023_03_17/JPK*/*_L001_R1_001.fastq.gz))
+R1=${fileArray[$SLURM_ARRAY_TASK_ID]}
+R2=${R1/R1_001.fastq.gz/R2_001.fastq.gz}
+baseName=${R1##*/}
+baseName=${baseName%%_*}
+
+hisat2 \
+    -x /home/gdkendalllab/lab/references/hisat2/danRer11 \
+    -1 ${R1},${R1/_L001_/_L002_} \
+    -2 ${R2},${R2/_L001_/_L002_} \
+    --threads 15 \
+    -k 1 \
+    --no-spliced-alignment \
+    --no-temp-splicesite \
+    --no-mixed \
+    --no-discordant \
+    --summary-file ${baseName}Summary.txt \
+    | samtools fixmate -@ 10 -m - - \
+    | samtools sort \
+        -T /gpfs0/scratch/rsjxk002/ \
+        -@ 10 \
+        -m 15G \
+        -O BAM \
+        | samtools view -@ 10 -b - \
+    > ${baseName}_align.bam
+samtools index ${baseName}_align.bam
+
+samtools markdup -@ 10 -r ${baseName}_align.bam - \
+    | samtools view -@ 10 -b - \
+    > ${baseName}_dedupd.bam
+samtools index ${baseName}_dedupd.bam
+```
+
+##call peaks
+```{bash}
+echo $HOSTNAME $SLURM_ARRAY_TASK_ID
+
+module purge
+module load GCC/7.3.0-2.30 \
+            OpenMPI/3.1.1 \
+            MACS2/2.2.5-Python-3.6.6
+
+fileArray=(JPK0028
+           JPK0030
+           JPK0032
+           JPK0034
+           JPK0036
+           JPK0038
+           JPK0040
+           JPK0042)
+           
+controlArray=(JPK0029
+              JPK0031
+              JPK0033
+              JPK0035
+              JPK0037
+              JPK0039
+              JPK0041
+              JPK0043)
+
+macs2 callpeak \
+  -t /home/gdkendalllab/lab/analyses/rsjxk002/P3F_ChIP_6hpf/align_nosplice/${fileArray[${SLURM_ARRAY_TASK_ID}]}_dedupd.bam \
+  -c /home/gdkendalllab/lab/analyses/rsjxk002/P3F_ChIP_6hpf/align_nosplice/${controlArray[${SLURM_ARRAY_TASK_ID}]}_dedupd.bam \
+  -n ${fileArray[${SLURM_ARRAY_TASK_ID}]} \
+  -f BAMPE \
+  -B \
+  -g 1679203469 \
+  --keep-dup all
+```
