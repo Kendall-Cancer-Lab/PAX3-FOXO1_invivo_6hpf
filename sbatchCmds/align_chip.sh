@@ -30,6 +30,9 @@ echo $R1
 baseName=${R1##*/}
 baseName=${baseName%%_*}
 
+# Using awk to remove alignments with insert sizes > 2000 that
+# mess up the peak calling
+
 hisat2 \
         -x /home/gdkendalllab/lab/references/hisat2/danRer11 \
         -1 ${R1},${R1/_L001_/_L002_} \
@@ -65,10 +68,14 @@ hisat2 \
     | python scripts/count_inline.py \
         -i "^@" \
         -o output/counts/chip_post_rmdup_${baseName}.tsv \
+    | awk '$9 < 2000 && $9 > -2000 || $1 ~/^@/ {print}' \
+    | python scripts/count_inline.py \
+        -i "^@" \
+        -o output/counts/chip_post_rm_big_${baseName}.tsv \
     | samtools view \
         -@ 10 \
         -b \
         - \
-    > output/align/chip/${baseName}_dedupd.bam
+    > output/align/chip/${baseName}.bam
 
-samtools index output/align/chip/${baseName}_dedupd.bam
+samtools index output/align/chip/${baseName}.bam
