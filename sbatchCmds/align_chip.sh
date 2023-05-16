@@ -7,6 +7,7 @@
 #SBATCH --job-name alignChIP
 #SBATCH --partition=himem,general
 #SBATCH --array=0-15
+#SBATCH --wait
 #SBATCH --time=1-00:00:00
 
 set -e
@@ -45,7 +46,7 @@ hisat2 \
         -m \
         - - \
     | samtools sort \
-        -T /gpfs0/scratch/rsjxk002/ \
+        -T /gpfs0/scratch/junkdir1337/ \
         -@ 10 \
         -m 15G \
         -O BAM \
@@ -66,6 +67,7 @@ hisat2 \
         -o output/counts/chip_post_rmdup_${baseName}.tsv \
     | samtools view \
         -@ 10 \
+        -b \
         - \
     > output/align/chip/${baseName}_dedupd.bam
 
