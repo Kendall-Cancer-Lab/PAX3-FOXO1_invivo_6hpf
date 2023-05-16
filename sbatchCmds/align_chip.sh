@@ -40,7 +40,7 @@ hisat2 \
         --no-temp-splicesite \
         --no-mixed \
         --no-discordant \
-        --summary-file ${baseName}Summary.txt \
+        --summary-file output/align/chip/${baseName}Summary.txt \
     | samtools fixmate \
         -@ 10 \
         -m \
