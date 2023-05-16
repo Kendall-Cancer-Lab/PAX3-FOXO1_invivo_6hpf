@@ -25,13 +25,12 @@ fileArray=(${inputPath}/*fastq.gz)
 base_name=${fileArray[${SLURM_ARRAY_TASK_ID}]##*/}
 
 fastqc \
-  -o output/fastqc \
+  -o output/fastqc/chip \
   -t 2 \
   --extract \
   ${fileArray[${SLURM_ARRAY_TASK_ID}]}
 
-rm output/fastqc/${base_name%.fastq.gz}_fastqc.zip
+rm output/fastqc/chip/${base_name%.fastq.gz}_fastqc.zip
 
 perl scripts/splitFastqcData.pl \
-    --input output/fastqc/${base_name%.fastq.gz}_fastqc/fastqc_data.txt \
-    --outputDir output/fastqc/${base_name%.fastq.gz}_fastqc/
+    --input output/fastqc/chip/${base_name%.fastq.gz}_fastqc/fastqc_data.txt

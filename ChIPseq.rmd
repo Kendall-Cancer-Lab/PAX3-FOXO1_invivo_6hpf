@@ -50,7 +50,9 @@ for directoryName in \
     misc \
     output \
     output/figures \
-    output/fastqc \
+    output/fastqc/chip \
+    output/fastqc/atac \
+    output/fastqc/rnaseq \
     output/counts \
     output/align/chip \
     output/align/rna \
