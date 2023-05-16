@@ -72,108 +72,107 @@ sbatch sbatchCmds/fastqc_chip.sh
 ```
 
 ### Plot Fastqc output for all samples
-```{r plotFastqc, dependson='fastqc_chip', eval=TRUE}
-adapter_file_dirs <- list.dirs(
-    path = "output/fastqc",
-    full.names = TRUE,
-    recursive = FALSE
-)
+```{r plotFastqcFun, dependson='fastqc_chip', eval=TRUE}
+fastqc_plots <- function(fastqc_dir, plot_name_base) {
+    adapter_file_dirs <-
+        list.dirs(path = fastqc_dir,
+                  full.names = TRUE,
+                  recursive = FALSE)
 
-to_plot <- tibble(
-    file = c(
-        "Adapter_Content.txt",
-        "Per_base_sequence_quality.txt"
-    ),
-    column = c(
-        "Nextera_Transposase_Sequence",
-        "Mean"
-    )
-)
+    to_plot <-
+        tibble(file = c("Adapter_Content.txt",
+                        "Per_base_sequence_quality.txt"),
+               column = c("Nextera_Transposase_Sequence",
+                          "Mean"))
 
-for (i in 1:nrow(to_plot)) {
-    temp_data <- NULL
+    for (i in 1:nrow(to_plot)) {
+        temp_data <- NULL
 
-    for (data_dir in adapter_file_dirs) {
-        temp_data <- read_delim(paste(data_dir,
-            "/split_data/",
-            to_plot$file[i],
-            sep = ""),
-        delim = "\t",
-        col_names = TRUE,
-        show_col_types = FALSE) %>%
-            rename_all(~ str_replace_all(., " ", "_")) %>%
-            rename_all(~ str_remove(., "[#']")) %>%
-            select(Base, to_plot$column[i]) %>%
-            mutate(Sample = str_remove(data_dir, "_001_fastqc") %>%
-                str_remove(".+\\/")) %>%
-            mutate(Read = str_remove(Sample, ".+_")) %>%
-            mutate(Tech = str_remove(Sample, "_.+")) %>%
-            bind_rows(temp_data)
+        for (data_dir in adapter_file_dirs) {
+            temp_data <-
+                read_delim(paste0(data_dir,
+                                  "/split_data/",
+                                  to_plot$file[i]),
+                           delim = "\t",
+                           col_names = TRUE,
+                           show_col_types = FALSE) %>%
+                rename_all(~ str_replace_all(., " ", "_")) %>%
+                rename_all(~ str_remove(., "[#']")) %>%
+                select(Base, to_plot$column[i]) %>%
+                mutate(Sample = str_remove(data_dir, "_001_fastqc") %>%
+                          str_remove(".+\\/")) %>%
+                mutate(Read = str_remove(Sample, ".+_")) %>%
+                mutate(Tech = str_remove(Sample, "_.+")) %>%
+                bind_rows(temp_data)
+        }
+
+        max_y <- ceiling(max(temp_data[[to_plot$column[i]]]) * 1.1)
+
+        plot_fastqc <-
+            ggplot(temp_data,
+                   aes(x = Base,
+                       y = get(to_plot$column[i]),
+                       group = Sample,
+                       color = Sample)) +
+            geom_line() +
+            geom_point() +
+            ylab(to_plot$column[i]) +
+            theme(legend.position = "none") +
+            ggtitle(str_remove(to_plot$file[i], ".txt"))
+
+        png(filename = paste0("output/figures/fastqc_",
+                              plot_name_base, "_",
+                              str_remove(to_plot$file[i], ".txt"),
+                              ".png"),
+            width = 7000,
+            height = 3000,
+            res = 300)
+        print(plot_fastqc)
+        dev.off()
     }
 
-    max_y <- ceiling(max(temp_data[[to_plot$column[i]]]) * 1.1)
+    input_reads <-
+        read_tsv(list.files(path = "output/fastqc",
+                            recursive = TRUE,
+                            pattern = "Basic_Statistics.txt",
+                            full.names = TRUE),
+                 id = "File",
+                 show_col_types = FALSE) %>%
+        filter(`#Measure` == "Total Sequences") %>%
+        select(-`#Measure`) %>%
+        mutate(File = str_remove(File, "output/fastqc/") %>%
+                    str_remove("_001_fastqc/split_data/Basic_Statistics.txt"),
+               Sample = str_remove(File, "_S[0-9].+"),
+               Lane = str_remove(File, ".+_L00") %>%
+                    str_remove("_R[12]"),
+               Read = str_replace(File, ".+_R", "R"),
+               Value = as.numeric(Value)) %>%
+        rename(Reads = Value)
 
-    plot_fastqc <- ggplot(temp_data,
-                          aes(x = Base,
-                              y = get(to_plot$column[i]),
-                              group = Sample,
-                              color = Sample)) +
-        geom_line() +
-        geom_point() +
-        facet_wrap(~Tech, ncol = 1) +
-        ylim(0, max_y) +
-        ylab(to_plot$column[i]) +
-        theme(legend.position = "none") +
-        ggtitle(str_remove(to_plot$file[i], ".txt"))
+    ggplot(input_reads,
+           aes(x = Sample,
+               y = Reads / 1000000,
+               fill = Lane)) +
+        geom_col() +
+        facet_wrap(~Read, ncol = 1) +
+        ylab("Reads (in millions)") +
+        xlab("") +
+        ggtitle("Sequenced Reads Per Sample") +
+        theme(axis.text.x = element_text(angle = 90, hjust = 1))
 
-    png(
-        filename = paste("output/figures/fastqc_",
-            str_remove(to_plot$file[i], ".txt"),
-            ".png",
-            sep = ""),
-        width = 7000,
-        height = 3000,
-        res = 300)
-    print(plot_fastqc)
-    dev.off()
+    ggsave(paste0("output/figures/",
+                  plot_name_base,
+                  "_InputReads.png"),
+           height = 3000,
+           width = 4000,
+           units = "px")
 }
-
-input_reads <-
-    read_tsv(list.files(path = "output/fastqc",
-                        recursive = TRUE,
-                        pattern = "Basic_Statistics.txt",
-                        full.names = TRUE),
-             id = "File",
-             show_col_types = FALSE) %>%
-    filter(`#Measure` == "Total Sequences") %>%
-    select(-`#Measure`) %>%
-    mutate(
-        File = str_remove(File, "output/fastqc/") %>%
-            str_remove("_001_fastqc/split_data/Basic_Statistics.txt"),
-        Sample = str_remove(File, "_S[0-9].+"),
-        Lane = str_remove(File, ".+_L00") %>%
-            str_remove("_R[12]"),
-        Read = str_replace(File, ".+_R", "R"),
-        Value = as.numeric(Value)) %>%
-    rename(Reads = Value)
-
-ggplot(input_reads,
-       aes(x = Sample,
-           y = Reads / 1000000,
-           fill = Lane)) +
-    geom_col() +
-    facet_wrap(~Read, ncol = 1) +
-    ylab("Reads (in millions)") +
-    xlab("") +
-    ggtitle("Sequenced Reads Per Sample") +
-    theme(axis.text.x = element_text(angle = 90, hjust = 1))
-
-ggsave("output/figures/InputReads.png",
-    height = 3000,
-    width = 4000,
-    units = "px"
-)
 ```
+
+```{r eval=FALSE}
+fastqc_plots("output/fastqc/chip", "chip")
+```
+
 
 ## Align ChIPseq libraries to zebrafish genome, index, and remove duplicates
 ```{bash}
