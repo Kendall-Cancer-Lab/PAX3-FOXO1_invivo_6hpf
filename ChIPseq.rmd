@@ -1,16 +1,22 @@
 ---
 title: "P3F_ChIP_6hpf_byJack"
-author: "Jack Kucinski"
-date: "March 17, 2023"
-output: html_document
+author: "Jack Kucinski and Matt Cannon"
+date: "`r format(Sys.time(), '%m/%d/%Y')`"
+output: 
+    html_document:
+        toc: true
+        toc_float: true
+        toc_depth: 5
+        number_sections: false
+        code_folding: hide
 ---
 
-#Title P3F_ChIP_6hpf_byJack
+# Title P3F_ChIP_6hpf_byJack
 
 ## Goals: 
 To analyze my first publishable ChIP-seq datasets in parallel with Matt Cannon to gain bioinformatics skills
 
-##Samples
+## Samples
 JPK0028	GSL-JK-3260 EID1602 P3F anti-FOXO1 ChIP 1
 JPK0029	GSL-JK-3260 EID1602 P3F anti-FOXO1 Input 1
 JPK0030	GSL-JK-3260 EID1602 CNTL anti-FOXO1 ChIP 1
@@ -28,53 +34,41 @@ JPK0041	GSL-JK-3260 EID1777 P3F anti-H3K27Ac Input 2
 JPK0042	GSL-JK-3260 EID1777 CNTL anti-H3K27Ac ChIP 2 
 JPK0043	GSL-JK-3260 EID1777 CNTL anti-H3K27Ac Input 2 
 
-#Workflow
+# Workflow
 
-##Align libraries to zebrafish genome, index, and remove duplicates
-```{bash}
-set -e
-echo ${HOSTNAME} ${SLURM_ARRAY_TASK_ID}
 
-module purge
-module load GCC/9.3.0 \
-            GCCcore/9.3.0 \
-            HISAT2/2.2.1 \
-            SAMtools/1.15
-
-fileArray=($(ls /home/gdkendalllab/lab/raw_data/fastq/2023_03_17/JPK*/*_L001_R1_001.fastq.gz))
-R1=${fileArray[$SLURM_ARRAY_TASK_ID]}
-R2=${R1/R1_001.fastq.gz/R2_001.fastq.gz}
-baseName=${R1##*/}
-baseName=${baseName%%_*}
-
-hisat2 \
-    -x /home/gdkendalllab/lab/references/hisat2/danRer11 \
-    -1 ${R1},${R1/_L001_/_L002_} \
-    -2 ${R2},${R2/_L001_/_L002_} \
-    --threads 15 \
-    -k 1 \
-    --no-spliced-alignment \
-    --no-temp-splicesite \
-    --no-mixed \
-    --no-discordant \
-    --summary-file ${baseName}Summary.txt \
-    | samtools fixmate -@ 10 -m - - \
-    | samtools sort \
-        -T /gpfs0/scratch/rsjxk002/ \
-        -@ 10 \
-        -m 15G \
-        -O BAM \
-        | samtools view -@ 10 -b - \
-    > ${baseName}_align.bam
-samtools index ${baseName}_align.bam
-
-samtools markdup -@ 10 -r ${baseName}_align.bam - \
-    | samtools view -@ 10 -b - \
-    > ${baseName}_dedupd.bam
-samtools index ${baseName}_dedupd.bam
+# Load packages
+```{r lib}
+library(tidyverse)
+theme_set(theme_bw())
+theme_update(plot.title = element_text(hjust = 0.5))
 ```
 
-##call peaks
+## Make up directory structure
+```{bash mkdirs, eval=TRUE}
+for directoryName in \
+    misc \
+    output \
+    output/figures \
+    output/counts \
+    output/align/chip \
+    output/align/rna \
+    output/peaks \
+    output/gene_counts
+do
+    if [ ! -d ${directoryName} ]
+    then
+        mkdir -p ${directoryName}
+    fi
+done
+```
+
+## Align ChIPseq libraries to zebrafish genome, index, and remove duplicates
+```{bash}
+sbatch sbatchCmds/align_chip.sh
+```
+
+## call peaks
 ```{bash}
 echo $HOSTNAME $SLURM_ARRAY_TASK_ID
 
