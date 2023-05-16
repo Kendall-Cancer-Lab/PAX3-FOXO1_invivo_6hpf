@@ -90,10 +90,9 @@ fastqc_plots <- function(fastqc_dir, plot_name_base) {
 
         for (data_dir in adapter_file_dirs) {
             temp_data <-
-                read_delim(paste0(data_dir,
+                read_tsv(paste0(data_dir,
                                   "/split_data/",
                                   to_plot$file[i]),
-                           delim = "\t",
                            col_names = TRUE,
                            show_col_types = FALSE) %>%
                 rename_all(~ str_replace_all(., " ", "_")) %>%
@@ -171,6 +170,8 @@ fastqc_plots <- function(fastqc_dir, plot_name_base) {
 
 ```{r eval=FALSE}
 fastqc_plots("output/fastqc/chip", "chip")
+fastqc_plots("output/fastqc/atac", "atac")
+
 ```
 
 
