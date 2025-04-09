@@ -1,0 +1,21 @@
+{
+    "atac.pipeline_type" : "atac",
+    "atac.genome_tsv" : "danRer11.tsv",
+    "atac.fastqs_rep1_R1" : [
+        "JPK0044/JPK0044_S1_L001_R1_001.fastq.gz"
+    ],
+    "atac.fastqs_rep1_R2" : [
+	"JPK0044_S1_L001_R2_001.fastq.gz"
+    ],
+    "atac.fastqs_rep2_R1" : [
+	"JPK0046_S3_L001_R1_001.fastq.gz"
+    ],
+    "atac.fastqs_rep2_R2" : [
+	"JPK0046_S3_L001_R2_001.fastq.gz"
+    ],
+    "atac.paired_end" : true,
+    "atac.auto_detect_adapter" : true,
+    "atac.enable_xcor" : true,
+    "atac.title" : "PAX3FOXO1",
+    "atac.description" : "ATAC-seq on PAX3FOXO1 injected zebra fish"
+}
