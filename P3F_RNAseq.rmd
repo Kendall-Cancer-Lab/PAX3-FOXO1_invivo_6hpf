@@ -1,0 +1,749 @@
+---
+title: "Rhabdomyosarcoma fusion oncoprotein initially pioneers a neural signature in vivo - RNA-seq Analysis"
+author: "Jack Kucinski"
+data: "04-10-2025"
+---
+# RNA-seq analysis - P3F v. CNTL
+## make directories
+```{bash}
+WORKDIR="path/to/working/directory"
+mkdir rnaseq
+mkdir rnaseq/analysis
+mkdir rnaseq/cennypipeline
+mkdir rnaseq/analysis/pca_volcano
+mkdir rnaseq/analysis/pathways_GO
+mkdir rnaseq/analysis/pathways_enricher
+mkdir rnaseq/analysis/pathways_gsea
+mkdir rnaseq/analysis/zebrafish_development
+mkdir rnaseq/publishedtimeline
+mkdir rnaseq/publishedtimeline/fastq
+mkdir rnaseq/analysis/domainMut
+mkdir rnaseq/domainMut/analysis
+mkdir rnaseq/domainMut/analysis/pca
+mkdir rnaseq/domainMut/analysis/pathways
+mkdir rnaseq/domainMut/analysis/pathways_comp
+```
+## RNA-SeqEZPZ (https://github.com/cxtaslim/RNA-SeqEZPZ)
+previously version 2.2 of the pipeline and 
+manually removed all genes with less the 1.5 fold change for DEG
+```{bash}
+cd rnaseq/cennypipeline
+bash /gpfs0/export/apps/opt/rnaseq-pipeline/2.2/scripts/run_rnaseq_full.sh genome=danRer11 time=1-00:00:00 &> run_rnaseq_full.out &
+```
+## Volcano plot of DEGs - Figure 5B
+```{r}
+library(EnhancedVolcano)
+library(org.Dr.eg.db)
+library(AnnotationDbi)
+
+setwd("$WORKDIR/rnaseq/analysis/pca_volcano")
+res <- read.delim("$WORKDIR/$rnaseq/cennypipeline/outputs/diff_analysis_rslt/tables/P3FvsCNTL.complete.txt")
+pdf("volcanoplot.pdf")
+EnhancedVolcano(res,
+                lab = res$Id,
+                x = "log2FoldChange",
+                y = "padj",
+                title = "PAX3::FOXO1 versus CNTL injected embryos",
+                pCutoff = 0.05,
+                FCcutoff = 1.5,
+                pointSize = 0.5,
+                labSize = 4.0,
+                labCol = 'black',
+                labFace = 'bold',
+                drawConnectors = TRUE,
+                boxedLabels = TRUE, 
+                col=c('gray', 'gray', 'gray', 'red3'),
+                selectLab = c('irx4a','olig2', 'her3', 'tfap2b', 'mycn', 'foxf1', 'pax3a', 'pax3b', 'six1a', 'twist1a', 'pax7a', "irx2a", 'pax3b', 'cdc27', 'nrp2a', 'sox3', 'snai1b', 'myhz2', 'dbx1b'),
+                legendPosition = 'none',
+                gridlines.major = TRUE,
+                gridlines.minor = TRUE)
+dev.off()
+```
+## Enricher to rhabdomyosarcoma datasets - Figure 5C
+```{r}
+library(clusterProfiler)
+library(tidyverse)
+library(msigdbr)
+
+setwd("$WORKDIR/$rnaseq/analysis/pathways_enricher")
+C2geneset = msigdbr(species = "Danio rerio", category = "C2", subcategory = "CGP")
+geneSet = subset(C2geneset, select = c(gs_name, gene_symbol))
+
+genes = read.delim("$WORKDIR/rnaseq/cennypipeline/outputs/diff_analysis_rslt/tables/P3FvsCNTL_FDR1.5_ALL.txt")
+genes <- genes$Id
+enricher <- enricher(genes, TERM2GENE = geneSet)
+write.csv(enricher, "C2enricher_all.csv")
+RMSall = enricher[enricher$ID %in% c('BEGUM_TARGETS_OF_PAX3_FOXO1_FUSION_AND_PAX3',
+                                          'BEGUM_TARGETS_OF_PAX3_FOXO1_FUSION_DN',
+                                          'BEGUM_TARGETS_OF_PAX3_FOXO1_FUSION_UP',
+                                          'REN_ALVEOLAR_RHABDOMYOSARCOMA_DN',
+                                          'REN_ALVEOLAR_RHABDOMYOSARCOMA_UP',
+                                          'GRYDER_PAX3FOXO1_ENHANCERS_IN_TADS',
+                                          'GRYDER_PAX3FOXO1_ENHANCERS_KO_DOWN',
+                                          'GRYDER_PAX3FOXO1_TOP_ENHANCERS',
+                                          'EBAUER_MYOGENIC_TARGETS_OF_PAX3_FOXO1_FUSION',
+                                          'EBAUER_TARGETS_OF_PAX3_FOXO1_FUSION_DN',
+                                          'EBAUER_TARGETS_OF_PAX3_FOXO1_FUSION_UP',
+                                          'DAVICIONI_MOLECULAR_ARMS_VS_ERMS_DN',
+                                          'DAVICIONI_MOLECULAR_ARMS_VS_ERMS_UP',
+                                          'DAVICIONI_PAX_FOXO1_SIGNATURE_IN_ARMS_DN',
+                                          'DAVICIONI_PAX_FOXO1_SIGNATURE_IN_ARMS_UP',
+                                          'DAVICIONI_RHABDOMYOSARCOMA_PAX_FOXO1_FUSION_DN',
+                                          'DAVICIONI_RHABDOMYOSARCOMA_PAX_FOXO1_FUSION_UP',
+                                          'DAVICIONI_TARGETS_OF_PAX_FOXO1_FUSIONS_DN',
+                                          'DAVICIONI_TARGETS_OF_PAX_FOXO1_FUSIONS_UP'),]
+write.csv(RMSall, "RMSenricher_all.csv")
+```
+## DAVID pathway analysis - Figure 5D
+took up and downregulated genes with FC greater or less than 1.5X into DAVID for pathway analysis
+## Pathway Analysis - Figure 5E-G, S6B-E
+```{r}
+setwd("$WORKDIR/rnaseq/analysis/pathways_GO")
+library(clusterProfiler)
+library(enrichplot)
+library(ggplot2)
+library("org.Dr.eg.db")
+OrgDb="org.Dr.eg.db"
+
+# gsea pathway analysis
+df = read.delim("$WORKDIR/rnaseq/cennypipeline/outputs/diff_analysis_rslt/tables/P3FvsCNTL.complete.txt")
+original_gene_list <- df$log2FoldChange
+names(original_gene_list) <- df$Id
+geneList <- na.omit(original_gene_list)
+geneList <- sort(geneList, decreasing = TRUE)
+
+pdf("complete_pathways.pdf")
+set.seed(1234)
+gse <- gseGO(geneList=geneList, ont = "BP", keyType = "SYMBOL", eps = 0, OrgDb = OrgDb, seed=TRUE)
+write.csv(gse, file = "PAX3FOXO1complete_BP.csv")
+gse <- gseGO(geneList=geneList, ont = "BP", keyType = "SYMBOL", scoreType = "pos", eps = 0, OrgDb = OrgDb, seed=TRUE)
+dotplot(gse, showCategory=10, split=".sign") + facet_grid(~.sign)
+gse <- gseGO(geneList=geneList, ont = "BP", keyType = "SYMBOL", scoreType = "neg", eps = 0, OrgDb = OrgDb, seed=TRUE)
+dotplot(gse, showCategory=10, split=".sign") + facet_grid(~.sign)
+gse <- gseGO(geneList=geneList, ont = "MF", keyType = "SYMBOL", eps = 0, OrgDb = OrgDb, seed=TRUE)
+write.csv(gse, file = "PAX3FOXO1complete_MF.csv")
+gse <- gseGO(geneList=geneList, ont = "MF", keyType = "SYMBOL", scoreType = "pos", eps = 0, OrgDb = OrgDb, seed=TRUE)
+dotplot(gse, showCategory=10, split=".sign") + facet_grid(~.sign)
+gse <- gseGO(geneList=geneList, ont = "MF", keyType = "SYMBOL", scoreType = "neg", eps = 0, OrgDb = OrgDb, seed=TRUE)
+dotplot(gse, showCategory=10, split=".sign") + facet_grid(~.sign)
+gse <- gseGO(geneList=geneList, ont = "CC", keyType = "SYMBOL", eps = 0, OrgDb = OrgDb, seed=TRUE)
+write.csv(gse, file = "PAX3FOXO1complete_CC.csv")
+gse <- gseGO(geneList=geneList, ont = "CC", keyType = "SYMBOL", scoreType = "pos", eps = 0, OrgDb = OrgDb, seed=TRUE)
+dotplot(gse, showCategory=10, split=".sign") + facet_grid(~.sign)
+gse <- gseGO(geneList=geneList, ont = "CC", keyType = "SYMBOL", scoreType = "neg", eps = 0, OrgDb = OrgDb, seed=TRUE)
+dotplot(gse, showCategory=10, split=".sign") + facet_grid(~.sign)
+dev.off()
+
+library(msigdbr)
+df = read.delim("$WORKDIR/rnaseq/cennypipeline/outputs/diff_analysis_rslt/tables/P3FvsCNTL.complete.txt")
+original_gene_list <- df$log2FoldChange
+names(original_gene_list) <- df$Id
+geneList <- na.omit(original_gene_list)
+geneList <- sort(geneList, decreasing = TRUE)
+
+geneset = msigdbr(species = "Danio rerio", category = "C2", subcategory = "CP:REACTOME")
+geneSet = subset(geneset, select = c(gs_name, gene_symbol))
+gse <- GSEA(geneList, TERM2GENE = geneSet, nPermSimple = 10000, eps = 0)
+write.csv(gse, "curatedpathway_reactome_gsea.csv")
+pdf("curatedpathway_reactome_gsea.pdf")
+gse <- GSEA(geneList, TERM2GENE = geneSet, nPermSimple = 10000, eps = 0, scoreType = "pos", seed = TRUE)
+dotplot(gse, showCategory=10, split=".sign") + facet_grid(~.sign)
+gse <- GSEA(geneList, TERM2GENE = geneSet, nPermSimple = 10000, eps = 0, scoreType = "neg", seed = TRUE)
+dotplot(gse, showCategory=10, split=".sign") + facet_grid(~.sign)
+dev.off()
+```
+## GSEA to Rhabdomyosarcoma scRNAseq data (Danielli et al.) - Figure 5I-J
+```{r}
+library(clusterProfiler)
+library(Orthology.eg.db)
+library(org.Dr.eg.db)
+library(org.Hs.eg.db)
+library(org.Mm.eg.db)
+OrgDb="org.Dr.eg.db"
+human="org.Hs.eg.db"
+setwd("$WORKDIR/rnaseq/analysis/pathways_gsea")
+
+# obtained markers from supplemental table in publication
+df <- read.csv("scGeneSets.csv")
+original_gene_list <- df$gs_name
+names(original_gene_list) <- df$gene_symbol
+ids<-bitr(names(original_gene_list), fromType = "SYMBOL", toType = "ENTREZID", OrgDb=human)
+dedup_ids = ids[!duplicated(ids[c("SYMBOL")]),]
+df2 = df[df$gene_symbol %in% ids$SYMBOL,]
+df2 = df2[!duplicated(df2[c("gene_symbol")]),]
+df2$Y = dedup_ids$ENTREZID
+geneSet <- df2$gs_name
+names(geneSet) <- df2$Y
+geneSet <- na.omit(geneSet)
+write.csv(geneSet, "scGeneSets_organized.csv")
+# reorder .csv in excel to gs_name, entrez_gene
+singlecell <- read.csv("scGeneSets_organized.csv")
+
+mapping <- select(Orthology.eg.db, singlecell$entrez_gene, "Danio_rerio","Homo_sapiens")
+write.csv(mapping, "SCmarkerstozebrafish.csv")
+# manually removed NA genes that didn not have ortholgs
+singlecell <- read.csv("SCmarkerstozebrafish.csv")
+genes <-read.delim("$WORKDIR/rnaseq/cennypipeline/outputs/diff_analysis_rslt/tables/P3FvsCNTL.complete.txt")
+original_gene_list <- genes$log2FoldChange
+names(original_gene_list) <- genes$Id
+ids<-bitr(names(original_gene_list), fromType = "SYMBOL", toType = "ENTREZID", OrgDb=OrgDb)
+dedup_ids = ids[!duplicated(ids[c("SYMBOL")]),]
+df2 = genes[genes$Id %in% dedup_ids$SYMBOL,]
+df2$Y = dedup_ids$ENTREZID
+geneList <- df2$log2FoldChange
+names(geneList) <- df2$Y
+geneList <- na.omit(geneList)
+geneList = geneList[!duplicated(names(geneList)),]
+geneList <- sort(geneList, decreasing = TRUE)
+gse <- GSEA(geneList, TERM2GENE = singlecell, nPermSimple = 10000, eps = 0)
+write.csv(gse, "scRNAseq_mRNA_gsea_zebrafishmarkers.csv")
+pdf("scRNAseq_mRNA_gsea_zebrafishmarkers.pdf")
+gseaplot(gse, title = gse$Description[1], geneSetID = 1)
+gseaplot(gse, title = gse$Description[2], geneSetID = 2)
+dev.off()
+```
+## GSEA to zebrafish sc-RNAseq - Figure 5H, SF-H
+```{r}
+library(clusterProfiler)
+library(tidyverse)
+library(readxl)
+library(DOSE)
+library(org.Dr.eg.db)
+OrgDb="org.Dr.eg.db"
+setwd("$WORKDIR$/rnaseq/analysis/zebrafish_development/")
+
+singlecell <- read_excel("$WORKDIR/rnaseq/analysis/zebrafish_development/zebrafish_scRNA_farnsworth.xlsx") # took tissue markers from publication
+singlecell <- subset(singlecell, select =c(cluster, gene))
+genes <-read.delim("$WORKDIR/rnaseq/cennypipeline/outputs/diff_analysis_rslt/tables/P3FvsCNTL.complete.txt")
+geneList <- genes$log2FoldChange
+names(geneList) <- genes$Id
+geneList <- sort(geneList, decreasing = TRUE)
+gse <- GSEA(geneList, TERM2GENE = singlecell, nPermSimple = 10000, eps = 0)
+write.csv(gse, "farnsworth_zebrafishGSEA.csv")
+
+singlecell <- read.csv("$WORKDIR/rnaseq/analysis/zebrafish_development/zebrafish-scRNA_saunders.csv")
+singlecell <- subset(singlecell, select = c(cell_type_sub, gene_short_name))
+genes <-read.delim("$WORKDIR/rnaseq/cennypipeline/outputs/diff_analysis_rslt/tables/P3FvsCNTL.complete.txt")
+geneList <- genes$log2FoldChange
+names(geneList) <- genes$Id
+geneList <- sort(geneList, decreasing = TRUE)
+gse <- GSEA(geneList, TERM2GENE = singlecell, nPermSimple = 10000, minGSSize = 0, maxGSSize = 1000, eps = 0)
+write.csv(gse, "saunders-celltypeSub_zebrafishGSEA.csv")
+
+singlecell <- read.csv("$WORKDIR/rnaseq/analysis/zebrafish_development/zebrafish-scRNA_saunders.csv")
+singlecell <- subset(singlecell, select = c(cell_type_broad, gene_short_name))
+genes <-read.delim("$WORKDIR/rnaseq/cennypipeline/outputs/diff_analysis_rslt/tables/P3FvsCNTL.complete.txt")
+geneList <- genes$log2FoldChange
+names(geneList) <- genes$Id
+geneList <- sort(geneList, decreasing = TRUE)
+gse <- GSEA(geneList, TERM2GENE = singlecell, nPermSimple = 10000, minGSSize = 15)
+write.csv(gse, "saunders-celltypeBroad_zebrafishGSEA.csv")
+pdf("saunders-celltypeBroad_zebrafishGSEA.pdf")
+gseaplot2(gse, geneSetID = 1:2)
+dev.off()
+
+singlecell <- read.csv("$WORKDIR/rnaseq/analysis/zebrafish_development/zebrafish-scRNA_saunders.csv")
+singlecell <- subset(singlecell, select = c(tissue, gene_short_name))
+genes <-read.delim("$WORKDIR/cennypipeline/outputs/diff_analysis_rslt/tables/P3FvsCNTL.complete.txt")
+geneList <- genes$log2FoldChange
+names(geneList) <- genes$Id
+geneList <- sort(geneList, decreasing = TRUE)
+gse <- GSEA(geneList, TERM2GENE = singlecell, nPermSimple = 10000, minGSSize = 15, eps = 0)
+write.csv(gse, "saunders-tissue_zebrafishGSEA.csv")
+pdf("saunders-tissue_zebrafishGSEA.pdf")
+gseaplot(gse, title = gse$Description[1], geneSetID = 1)
+gseaplot2(gse, geneSetID = 1:4)
+dev.off()
+
+singlecell <- read.csv("/$WORKDIR/rnaseq/analysis/zebrafish_development/zebrafish-scRNA_saunders.csv")
+singlecell <- subset(singlecell, select = c(tissue, gene_short_name))
+genes <-read.delim("$WORKDIR/rnaseq/cennypipeline/outputs/diff_analysis_rslt/tables/P3FvsCNTL.complete.txt")
+geneList <- genes$log2FoldChange
+names(geneList) <- genes$Id
+geneList <- sort(geneList, decreasing = TRUE)
+gse <- GSEA(geneList, TERM2GENE = singlecell, nPermSimple = 10000, minGSSize = 15, eps = 0)
+pdf("saunders-tissue_zebrafishGSEA_down.pdf")
+gseaplot2(gse, geneSetID = 7)
+dev.off()
+```
+## Cell state GSEA - Figure 6SI-J
+```{r}
+setwd("$WORKDIR/rnaseq/analysis/pathways_gsea")
+library(clusterProfiler)
+library(enrichplot)
+library(msigdbr)
+library(ggplot2)
+library(dplyr)
+library(msigdb)
+library(ExperimentHub)
+library(GSEABase)
+library("org.Dr.eg.db")
+library("org.Hs.eg.db")
+OrgDb="org.Dr.eg.db"
+human="org.Hs.eg.db"
+
+df = read.delim("$WORKDIR/rnaseq/cennypipeline/outputs/diff_analysis_rslt/tables/P3FvsCNTL.complete.txt")
+original_gene_list <- df$log2FoldChange
+names(original_gene_list) <- df$Id
+geneList <- na.omit(original_gene_list)
+geneList <- sort(geneList, decreasing = TRUE)
+
+C8geneset = msigdbr(species = "Danio rerio", category = "C8")
+geneSet = subset(C8geneset, select = c(gs_name, gene_symbol))
+gse <- GSEA(geneList, TERM2GENE = geneSet, nPermSimple = 10000, eps = 0)
+write.csv(gse, "celltype_C8_gsea.csv")
+pdf("celltype_C8_gsea.pdf")
+gse <- GSEA(geneList, TERM2GENE = geneSet, nPermSimple = 10000, eps = 0, scoreType = "pos")
+dotplot(gse, showCategory=10, split=".sign") + facet_grid(~.sign)
+gse <- GSEA(geneList, TERM2GENE = geneSet, nPermSimple = 10000, eps = 0, scoreType = "neg")
+dotplot(gse, showCategory=10, split=".sign") + facet_grid(~.sign)
+dev.off()
+```
+## comparison to developmental timepoints (White et al., eLife, 2017)
+#### downloading data 
+```{bash}
+cd $WORKDIR/rnaseq/publishedtimeline/fastq
+wget -nc ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR144/001/ERR1442561/ERR1442561_1.fastq.gz
+wget -nc ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR144/001/ERR1442831/ERR1442831_1.fastq.gz
+wget -nc ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR144/001/ERR1442741/ERR1442741_2.fastq.gz
+wget -nc ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR144/001/ERR1442651/ERR1442651_1.fastq.gz
+wget -nc ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR144/001/ERR1442561/ERR1442561_2.fastq.gz
+wget -nc ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR144/001/ERR1442651/ERR1442651_2.fastq.gz
+wget -nc ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR144/001/ERR1442831/ERR1442831_2.fastq.gz
+wget -nc ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR144/001/ERR1442741/ERR1442741_1.fastq.gz
+
+cd $WORKDIR/rnaseq/publishedtimeline/fastq
+wget -nc ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR144/001/ERR1442711/ERR1442711_2.fastq.gz
+wget -nc ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR144/001/ERR1442891/ERR1442891_2.fastq.gz
+wget -nc ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR144/001/ERR1442801/ERR1442801_1.fastq.gz
+wget -nc ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR144/001/ERR1442621/ERR1442621_1.fastq.gz
+wget -nc ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR144/001/ERR1442891/ERR1442891_1.fastq.gz
+wget -nc ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR144/001/ERR1442801/ERR1442801_2.fastq.gz
+wget -nc ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR144/001/ERR1442711/ERR1442711_1.fastq.gz
+wget -nc ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR144/001/ERR1442621/ERR1442621_2.fastq.gz
+
+cd $WORKDIR/rnaseq/publishedtimeline/fastq
+wget -nc ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR144/001/ERR1442781/ERR1442781_2.fastq.gz
+wget -nc ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR144/001/ERR1442871/ERR1442871_1.fastq.gz
+wget -nc ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR144/001/ERR1442601/ERR1442601_2.fastq.gz
+wget -nc ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR144/001/ERR1442691/ERR1442691_1.fastq.gz
+wget -nc ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR144/001/ERR1442871/ERR1442871_2.fastq.gz
+wget -nc ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR144/001/ERR1442781/ERR1442781_1.fastq.gz
+wget -nc ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR144/001/ERR1442601/ERR1442601_1.fastq.gz
+wget -nc ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR144/001/ERR1442691/ERR1442691_2.fastq.gz
+
+cd $WORKDIR/rnaseq/publishedtimeline/fastq
+wget -nc ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR144/006/ERR1442606/ERR1442606_2.fastq.gz
+wget -nc ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR144/006/ERR1442696/ERR1442696_1.fastq.gz
+wget -nc ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR144/006/ERR1442876/ERR1442876_1.fastq.gz
+wget -nc ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR144/006/ERR1442786/ERR1442786_2.fastq.gz
+wget -nc ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR144/006/ERR1442606/ERR1442606_1.fastq.gz
+wget -nc ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR144/006/ERR1442696/ERR1442696_2.fastq.gz
+wget -nc ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR144/006/ERR1442786/ERR1442786_1.fastq.gz
+wget -nc ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR144/006/ERR1442876/ERR1442876_2.fastq.gz
+
+cp -r $WORKDIR/rnaseq/cennypipeline/fastq/JPK* .
+```
+manually rename files to match samples.txt
+### run rna-seq pipeline for DEGs
+```{bash}
+cd /home/gdkendalllab/lab/analyses/rsjxk002/P3F_at6hpf_jack/rnaseq/publishedtimeline
+bash /gpfs0/export/apps/opt/rnaseq-pipeline/2.2/scripts/run_rnaseq_full.sh genome=danRer11 time=1-00:00:00 &> run_rnaseq_full.out &
+```
+### correlation of RNA-seq samples - Figure S6A
+```{r}
+library(DESeq2)
+library(magrittr)
+library(ggplot2)
+library(pheatmap)
+
+setwd("$WORKDIR/rnaseq/analysis/pca_volcano")
+pdf("clustering.pdf")
+df <- read.delim("$WORKDIR/rnaseq/publishedtimeline/outputs/diff_analysis_rslt/tables/P3FvsCNTL.complete.txt")
+df <- subset(df, select = c(CNTL, P3F, dome, X50epi, shield, X75epi))
+header.true <- function(df) {
+  names(df) <- as.character(unlist(df[1,]))
+  df[-1,]}
+corr_coeff <- cor(df, method = "pearson")
+as.dist(1-corr_coeff, upper = TRUE) %>%
+as.matrix %>%
+pheatmap(., main = "Pearson correlation")
+df <- read.delim("$WORKDIR/rnaseq/publishedtimeline/outputs/diff_analysis_rslt/tables/P3FvsCNTL.complete.txt")
+df <- subset(df, select = c(norm.CNTLrep1, norm.CNTLrep2, norm.CNTLrep3, norm.CNTLrep4,
+                                norm.P3Frep1, norm.P3Frep2, norm.P3Frep3, norm.P3Frep4,
+                                norm.domerep1, norm.domerep2, norm.domerep3, norm.domerep4,
+                                norm.50epirep1, norm.50epirep2, norm.50epirep3, norm.50epirep4,
+                                norm.shieldrep1, norm.shieldrep2, norm.shieldrep3, norm.shieldrep4,
+                                norm.75epirep1, norm.75epirep2, norm.75epirep3, norm.75epirep4))
+header.true <- function(df) {
+  names(df) <- as.character(unlist(df[1,]))
+  df[-1,]}
+corr_coeff <- cor(df, method = "pearson")
+as.dist(1-corr_coeff, upper = TRUE) %>%
+as.matrix %>%
+pheatmap(., main = "Pearson correlation")
+dev.off()
+```
+#### PCA of RNA-seq samples - Figure 5A
+```{r}
+library(DESeq2)
+library(tidyverse)
+library(RColorBrewer)
+library(pheatmap)
+
+setwd("$WORKDIR/rnaseq/analysis/pca_volcano")
+cts <- as.matrix(read.delim("$WORKDIR/rnaseq/publishedtimeline/outputs/diff_analysis_rslt/tables/P3FvsCNTL.complete.txt", row.names="Id"))
+cts <- subset(cts, select =c(P3Frep1, P3Frep2, CNTLrep1, CNTLrep2,
+                            P3Frep3, P3Frep4, CNTLrep3, CNTLrep4,
+                            domerep1, domerep2, domerep3, domerep4,
+                            X50epirep1, X50epirep2, X50epirep3, X50epirep4,
+                            shieldrep1, shieldrep2, shieldrep3, shieldrep4,
+                            X75epirep1, X75epirep2, X75epirep3, X75epirep4))
+pasAnno <- read.delim("$WORKDIR/rnaseq/publishedtimeline/outputs/diff_analysis_rslt/target.txt",row.names=1)
+coldata <- pasAnno[,c("group","rep")]
+coldata$group <- factor(coldata$group)
+coldata$rep <- factor(coldata$rep)
+colnames(cts) <- sub("X", "", colnames(cts))
+
+dds <- DESeqDataSetFromMatrix(countData = cts,
+                              colData = coldata,
+                              design = ~ group)
+featureData <- data.frame(gene=rownames(cts))
+mcols(dds) <- DataFrame(mcols(dds), featureData)
+mcols(dds)
+vsd <- vst(dds, blind=TRUE)
+rld <- rlog(dds, blind=TRUE)
+head(assay(vsd), 3)
+
+pdf("pcaTimecourse_plot.pdf")
+pcaData <- plotPCA(vsd, intgroup=c("group"), returnData=TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+ggplot(pcaData, aes(PC1, PC2, color=group)) +
+  geom_point(size=3.25) +
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) + 
+  coord_fixed() +
+  theme_bw()
+dev.off()
+
+pdf("pcaTimecourse_clustering.pdf")
+sampleDists <- dist(t(assay(vsd)))
+sampleDistMatrix <- as.matrix(sampleDists)
+rownames(sampleDistMatrix) <- paste(vsd$group)
+colnames(sampleDistMatrix) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows=sampleDists,
+         clustering_distance_cols=sampleDists,
+         col=colors)
+dev.off()
+```
+#### GSEA between dome and shield embryos - Figure S6E
+```{r}
+library(clusterProfiler)
+library(enrichplot)
+library(ggplot2)
+library("org.Dr.eg.db")
+OrgDb="org.Dr.eg.db"
+setwd("$WORKDIR/rnaseq/publishedtimeline/")
+
+df = read.delim("$WORKDIR/rnaseq/publishedtimeline/outputs/diff_analysis_rslt/tables/shieldvsdome.complete.txt")
+original_gene_list <- df$log2FoldChange
+names(original_gene_list) <- df$Id
+geneList <- na.omit(original_gene_list)
+geneList <- sort(geneList, decreasing = TRUE)
+
+pdf("complete_pathways.pdf")
+set.seed(1234)
+gse <- gseGO(geneList=geneList, ont = "BP", keyType = "SYMBOL", eps = 0, OrgDb = OrgDb, seed=TRUE)
+write.csv(gse, file = "complete_BP.csv")
+gse <- gseGO(geneList=geneList, ont = "BP", keyType = "SYMBOL", scoreType = "pos", eps = 0, OrgDb = OrgDb, seed=TRUE)
+dotplot(gse, showCategory=10, split=".sign") + facet_grid(~.sign)
+gse <- gseGO(geneList=geneList, ont = "BP", keyType = "SYMBOL", scoreType = "neg", eps = 0, OrgDb = OrgDb, seed=TRUE)
+dotplot(gse, showCategory=10, split=".sign") + facet_grid(~.sign)
+gse <- gseGO(geneList=geneList, ont = "MF", keyType = "SYMBOL", eps = 0, OrgDb = OrgDb, seed=TRUE)
+write.csv(gse, file = "complete_MF.csv")
+gse <- gseGO(geneList=geneList, ont = "MF", keyType = "SYMBOL", scoreType = "pos", eps = 0, OrgDb = OrgDb, seed=TRUE)
+dotplot(gse, showCategory=10, split=".sign") + facet_grid(~.sign)
+gse <- gseGO(geneList=geneList, ont = "MF", keyType = "SYMBOL", scoreType = "neg", eps = 0, OrgDb = OrgDb, seed=TRUE)
+dotplot(gse, showCategory=10, split=".sign") + facet_grid(~.sign)
+gse <- gseGO(geneList=geneList, ont = "CC", keyType = "SYMBOL", eps = 0, OrgDb = OrgDb, seed=TRUE)
+write.csv(gse, file = "complete_CC.csv")
+gse <- gseGO(geneList=geneList, ont = "CC", keyType = "SYMBOL", scoreType = "pos", eps = 0, OrgDb = OrgDb, seed=TRUE)
+dotplot(gse, showCategory=10, split=".sign") + facet_grid(~.sign)
+gse <- gseGO(geneList=geneList, ont = "CC", keyType = "SYMBOL", scoreType = "neg", eps = 0, OrgDb = OrgDb, seed=TRUE)
+dotplot(gse, showCategory=10, split=".sign") + facet_grid(~.sign)
+dev.off()
+```
+## RNAseq with PAX3::FOXO1-minusHD
+#### RNAseq-EZPZ
+```{bash}
+cd /home/gdkendalllab/lab/analyses/rsjxk002/P3F_at6hpf_jack/rnaseq/domainMut
+bash /apps/opt/rnaseq-pipeline/3.3/scripts/run_shiny_analysis.sh filepath=/home/gdkendalllab/lab
+used danRer11_custom genome, contains P3F sequence
+```
+#### correlation of RNA-seq samples - Figure 6G
+```{r}
+library(DESeq2)
+library(magrittr)
+library(ggplot2)
+library(pheatmap)
+library(tidyverse)
+library(RColorBrewer)
+setwd("$WORKDIR/rnaseq/domainMut/analysis/pca")
+
+pdf("clustering.pdf")
+df <- read.delim("$WORKDIR/rnaseq/domainMut/outputs/diff_analysis_rslt/tables/P3FvsHDmut.complete.txt")
+df <- subset(df, select = c(norm.CNTLrep1, norm.CNTLrep2, norm.CNTLrep3,
+                                norm.P3Frep1, norm.P3Frep2, norm.P3Frep3,
+                                norm.HDmutrep1, norm.HDmutrep2, norm.HDmutrep3, norm.HDmutrep4, norm.HDmutrep5))
+header.true <- function(df) {
+  names(df) <- as.character(unlist(df[1,]))
+  df[-1,]}
+corr_coeff <- cor(df, method = "pearson")
+as.dist(1-corr_coeff, upper = TRUE) %>%
+as.matrix %>%
+pheatmap(., main = "Pearson correlation")
+dev.off()
+
+cts <- read.delim("$WORKDIR/rnaseq/domainMut/outputs/diff_analysis_rslt/tables/P3FvsHDmut.complete.txt")
+cts <- subset(cts, select = c(HDmutrep1, HDmutrep2, HDmutrep3, HDmutrep4, HDmutrep5,
+                                P3Frep1, P3Frep2, P3Frep3,
+                                CNTLrep1, CNTLrep2, CNTLrep3))
+pasAnno <- read.delim("$WORKDIR/rnaseq/domainMut/outputs/diff_analysis_rslt/target.txt",row.names=1)
+coldata <- pasAnno[,c("group","rep")]
+coldata$group <- factor(coldata$group)
+coldata$rep <- factor(coldata$rep)
+colnames(cts) <- sub("X", "", colnames(cts))
+
+dds <- DESeqDataSetFromMatrix(countData = cts,
+                              colData = coldata,
+                              design = ~ group)
+featureData <- data.frame(gene=rownames(cts))
+mcols(dds) <- DataFrame(mcols(dds), featureData)
+mcols(dds)
+vsd <- vst(dds, blind=TRUE)
+rld <- rlog(dds, blind=TRUE)
+head(assay(vsd), 3)
+
+pdf("pca_plot.pdf")
+pcaData <- plotPCA(vsd, intgroup=c("group"), returnData=TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+ggplot(pcaData, aes(PC1, PC2, color=group)) +
+  geom_point(size=4.5) +
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) + 
+  coord_fixed() +
+  theme_bw()
+dev.off()
+
+pdf("pca_clustering.pdf")
+sampleDists <- dist(t(assay(vsd)))
+sampleDistMatrix <- as.matrix(sampleDists)
+rownames(sampleDistMatrix) <- paste(vsd$group)
+colnames(sampleDistMatrix) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows=sampleDists,
+         clustering_distance_cols=sampleDists,
+         col=colors)
+dev.off()
+```
+#### Filter of upregulated genes with cutoffs
+```{r}
+setwd("$WORKDIR/rnaseq/domainMut/outputs/diff_analysis_rslt/tables/")
+
+p3f <- read.delim("$WORKDIR/rnaseq/domainMut/outputs/diff_analysis_rslt/tables/P3FvsCNTL.complete.txt")
+hd <- read.delim("$WORKDIR/rnaseq/domainMut/outputs/diff_analysis_rslt/tables/HDmutvsCNTL.complete.txt")
+
+p3f_cutoff <- p3f[!is.na(p3f$log2FoldChange) & !is.na(p3f$padj) & p3f$log2FoldChange >= 0.585 & p3f$padj <= 0.05, ]
+hd_cutoff <- hd[!is.na(hd$log2FoldChange) & !is.na(hd$padj) & hd$log2FoldChange >= 0.585 & hd$padj <= 0.05, ]
+write.table(p3f_cutoff, "P3FvsCNTL_upregulated-FC1.5.txt", sep="\t", row.names=FALSE)
+write.table(hd_cutoff, "HDmutvsCNTL_upregulated-FC1.5.txt", sep="\t", row.names=FALSE)
+```
+#### Shared upregulated genes - Figure 6H, S8B
+```{r}
+setwd("$WORKDIR/rnaseq/domainMut/analysis/gene_expression/")
+
+p3f_up <- read.delim("$WORKDIR/rnaseq/domainMut/outputs/diff_analysis_rslt/tables/P3FvsCNTL_upregulated-FC1.5.txt")
+hd_up <- read.delim("$WORKDIR/rnaseq/domainMut/outputs/diff_analysis_rslt/tables/HDmutvsCNTL_upregulated-FC1.5.txt")
+p3f_only <- p3f_up[! p3f_up$Id %in% hd_up$Id, ]
+shared <- p3f_up[p3f_up$Id %in% hd_up$Id, ]
+hd_only <- hd_up[! hd_up$Id %in% p3f_up$Id, ]
+p3f <- read.delim("$WORKDIR/rnaseq/domainMut/outputs/diff_analysis_rslt/tables/P3FvsCNTL.complete.txt")
+hd <- read.delim("$WORKDIR/rnaseq/domainMut/outputs/diff_analysis_rslt/tables/HDmutvsCNTL.complete.txt")
+
+p3f_filter <- p3f[p3f$Id %in% p3f_only$Id, ]
+write.csv(p3f_filter, "P3F_P3Fonly_upregulated.csv")
+p3f_filter <- p3f[p3f$Id %in% shared$Id, ]
+write.csv(p3f_filter, "P3F_PAX3FOXO1-HD-shared_upregulated.csv")
+p3f_filter <- p3f[p3f$Id %in% hd_only$Id, ]
+write.csv(p3f_filter, "P3F_HDonly_upregulated.csv")
+
+hd_filter <- hd[hd$Id %in% p3f_only$Id, ]
+write.csv(hd_filter, "HD_P3Fonly_upregulated.csv")
+hd_filter <- hd[hd$Id %in% shared$Id, ]
+write.csv(hd_filter, "HD_PAX3FOXO1-HD-shared_upregulated.csv")
+hd_filter <- hd[hd$Id %in% hd_only$Id, ]
+write.csv(hd_filter, "HD_HDonly_upregulated.csv")
+```
+#### Pathway expression - Figure 6J, S8G-H
+```{r}
+library(clusterProfiler)
+library(tidyverse)
+library(msigdbr)
+library(DESeq2)
+library(pheatmap)
+library(org.Dr.eg.db)
+OrgDb="org.Dr.eg.db"
+setwd("$WORKDIR/rnaseq/domainMut/analysis/pathways/gene_lists")
+
+p3f <- read.delim("$WORKDIR/rnaseq/domainMut/outputs/diff_analysis_rslt/tables/P3FvsCNTL.complete.txt")
+hd <- read.delim("$WORKDIR/rnaseq/domainMut/outputs/diff_analysis_rslt/tables/HDmutvsCNTL.complete.txt")
+
+geneset = msigdbr(species = "Danio rerio", category = "C5", subcategory = "GO:BP")
+geneSet = subset(geneset, select = c(gs_name, gene_symbol))
+geneSet <- geneSet %>% filter(gs_name == "GOBP_NEUROGENESIS")
+p3f_filtered <- p3f %>% filter(Id %in% geneSet$gene_symbol)
+write.csv(p3f_filtered, "P3FvCNTL_neurogenesis.csv")
+hd_filtered <- hd %>% filter(Id %in% geneSet$gene_symbol)
+write.csv(hd_filtered, "HDmutvCNTL_neurogenesis.csv")
+
+geneset = msigdbr(species = "Danio rerio", category = "C5", subcategory = "GO:BP")
+geneSet = subset(geneset, select = c(gs_name, gene_symbol))
+geneSet <- geneSet %>% filter(gs_name == "GOBP_AXON_DEVELOPMENT")
+p3f_filtered <- p3f %>% filter(Id %in% geneSet$gene_symbol)
+write.csv(p3f_filtered, "P3FvCNTL_axonDevelopment.csv")
+hd_filtered <- hd %>% filter(Id %in% geneSet$gene_symbol)
+write.csv(hd_filtered, "HDmutvCNTL_axonDevelopment.csv")
+
+geneset = msigdbr(species = "Danio rerio", category = "C5", subcategory = "GO:BP")
+geneSet = subset(geneset, select = c(gs_name, gene_symbol))
+geneSet <- geneSet %>% filter(gs_name == "GOBP_SYNAPTIC_SIGNALING")
+p3f_filtered <- p3f %>% filter(Id %in% geneSet$gene_symbol)
+write.csv(p3f_filtered, "P3FvCNTL_synapticSignaling.csv")
+hd_filtered <- hd %>% filter(Id %in% geneSet$gene_symbol)
+write.csv(hd_filtered, "HDmutvCNTL_synapticSignaling.csv")
+```
+#### Comparison of pathways - Figure 6I, S8F
+```{r}
+library(clusterProfiler)
+library(DOSE)
+library(enrichplot)
+library(tidyverse)
+library(ReactomePA)
+library(org.Dr.eg.db)
+OrgDb="org.Dr.eg.db"
+setwd("$WORKDIR/rnaseq/domainMut/analysis/pathways_comp")
+
+full <- read.delim("$WORKDIR/rnaseq/domainMut/outputs/diff_analysis_rslt/tables/P3FvsCNTL_upregulated-FC1.5.txt")
+mut <- read.delim("$WORKDIR/rnaseq/domainMut/outputs/diff_analysis_rslt/tables/HDmutvsCNTL_upregulated-FC1.5.txt")
+comp <- read.delim("$WORKDIR/rnaseq/domainMut/outputs/diff_analysis_rslt/tables/P3FvsHDmut.complete.txt")
+comp <- comp[!is.na(comp$log2FoldChange) & !is.na(comp$padj) & comp$log2FoldChange >= 0.585 & comp$padj <= 0.05, ]
+
+set.seed(896799)
+list <- list(   P3FvCNTL = full$Id,
+                HDmutvCNTL = mut$Id,
+                P3FvHDmut = comp$Id)
+pdf("PAX3FOXO1-minusHD_pathwayComparison_GOBP.pdf")
+results <- compareCluster(
+                geneClusters = list,
+                fun = "enrichGO", # or "enrichKEGG", "enrichPathway" (Reactome)
+                OrgDb = OrgDb,
+                ont = "BP", # "BP" for biological process, "MF" for molecular function, "CC" for cellular component)
+                keyType = "SYMBOL")
+dotplot(results, showCategory = 5)
+cnetplot(results, 
+                showCategory = 5, 
+                node_lab='category', 
+                circular = FALSE,
+                cex_gene = 2)
+res <- pairwise_termsim(results)
+emapplot(res)
+write.csv(results, "PAX3FOXO1-minusHD_pathwayComparison_GOBP.csv")
+dev.off()
+```
+#### Volcano plot of DEGs - Figure S8C-E
+```{r}
+library(ggpubr)
+library(ggplot)
+setwd("$WORKDIR/rnaseq/domainMut/analysis/pca")
+
+tiff("P3FvCNTL_MAplot.tiff", width = 6, height = 4, units = "in", res = 300)
+res <- read.delim("/home/gdkendalllab/lab/analyses/rsjxk002/P3F_at6hpf_jack/rnaseq/domainMut/outputs/diff_analysis_rslt/tables/P3FvsCNTL.complete.txt")
+plot <- subset(res, select = c(Id, CNTL, P3F, log2FoldChange, padj))
+plot$baseMean <- rowMeans(plot[ , c("CNTL", "P3F")], na.rm = TRUE)
+ggmaplot(       plot,
+                fdr = 0.05,
+                fc = 1.5, 
+                genenames = as.vector(plot$Id),
+                legend = "top", top = 10,
+                label.select = NULL,
+                detection_call = NULL,
+                size = .4,
+                alpha = 0.75,
+                seed = 42,
+                font.label = c(12, "italic", "black"),
+                label.rectangle = TRUE,
+                palette = c("#B31B21", "#1465AC", "darkgray"),
+                select.top.method = c("padj"),
+                main = NULL,
+                xlab = "Log2 mean expression",
+                ylab = "Log2 fold change",
+                xlim = c(0, 20),
+                ylim = c(-25, 25),
+                ggtheme = theme_classic())
+dev.off()
+
+tiff("P3FvHDmut_MAplot.tiff", width = 6, height = 4, units = "in", res = 300)
+res <- read.delim("/home/gdkendalllab/lab/analyses/rsjxk002/P3F_at6hpf_jack/rnaseq/domainMut/outputs/diff_analysis_rslt/tables/P3FvsHDmut.complete.txt")
+plot <- subset(res, select = c(Id, HDmut, P3F, log2FoldChange, padj))
+plot$baseMean <- rowMeans(plot[ , c("HDmut", "P3F")], na.rm = TRUE)
+ggmaplot(       plot,
+                fdr = 0.05,
+                fc = 1.5, 
+                genenames = as.vector(plot$Id),
+                legend = "top", top = 0,
+                label.select = c('fstl1a','gch2', 'zgc:56628', 'dbx1a', 'pnocb', 'rbp4l', 'dbx1b', 'spra', 'hapln1a', 'tfap2b'),
+                detection_call = NULL,
+                size = .4,
+                alpha = 0.75,
+                seed = 42,
+                font.label = c(12, "italic", "black"),
+                label.rectangle = TRUE,
+                palette = c("#B31B21", "#1465AC", "darkgray"),
+                select.top.method = c("fc"),
+                main = NULL,
+                xlab = "Log2 mean expression",
+                ylab = "Log2 fold change",
+                xlim = c(0, 20),
+                ylim = c(-25, 25),
+                ggtheme = theme_classic())
+dev.off()
+
+tiff("HDmutvCNTL_MAplot.tiff", width = 6, height = 4, units = "in", res = 300)
+res <- read.delim("$WORKDIR/rnaseq/domainMut/outputs/diff_analysis_rslt/tables/HDmutvsCNTL.complete.txt")
+plot <- subset(res, select = c(Id, CNTL, HDmut, log2FoldChange, padj))
+plot$baseMean <- rowMeans(plot[ , c("CNTL", "HDmut")], na.rm = TRUE)
+ggmaplot(       plot,
+                fdr = 0.05,
+                fc = 1.5, 
+                genenames = as.vector(plot$Id),
+                legend = "top", top = 0,
+                label.select = c('fstl1a','gch2', 'zgc:56628', 'dbx1a', 'pnocb', 'rbp4l', 'dbx1b', 'spra', 'hapln1a', 'tfap2b'),
+                detection_call = NULL,
+                size = .4,
+                alpha = 0.75,
+                seed = 42,
+                font.label = c(12, "italic", "black"),
+                label.rectangle = TRUE,
+                palette = c("#B31B21", "#1465AC", "darkgray"),
+                select.top.method = c("fc"),
+                main = NULL,
+                xlab = "Log2 mean expression",
+                ylab = "Log2 fold change",
+                xlim = c(0, 20),
+                ylim = c(-25, 25),
+                ggtheme = theme_classic())
+dev.off()
+```

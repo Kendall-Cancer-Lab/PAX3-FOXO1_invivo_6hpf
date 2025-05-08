@@ -1,0 +1,359 @@
+---
+title: "ATACseq Analysis of PAX3-FOXO1 injected zebrafish and ABC model"
+output: 
+ html_document:
+  code_folding: hide
+editor: visual
+editor_options: 
+  chunk_output_type: inline
+---
+# Goal
+This project aims to understand the initial in vivo activities of PAX3-FOXO1, and how it alters chromatin accessibility.
+We inject human PAX3-FOXO1 or control sfGFP mRNA to study the consequences at 6 hours post fertilization (hpf).
+This is Jack Kucinski's project, code by Cenny Taslim (formatted by Jack for Github).
+# Samples
+OmniATAC-seq was done on 50,000 cells from embryos of the following groups:
+
+-   Wildtype WIK + PAX3-FOXO1 mRNA (n=2)
+
+    -   JPK0044 EID2485 ATACseq PAX3-FOXO1 1
+
+    -   JPK0046 EID2486 ATACseq PAX3-FOXO1 2
+
+-   Wildtype WIK + CNTL mRNA (n=2)
+
+    -   JPK0045 EID2485 ATACseq CNTL 1
+
+    -   JPK0047 EID2486 ATACseq CNTL 2\
+DNA libraries were prepared and sequenced on the Nova Seq SP 600 2x 150 bp
+# Set up 
+```{r setup}
+workdir="path/to/working/direcotry"
+knitr::opts_knit$set(root.dir=workdir)
+setwd(workdir)
+getwd()
+
+#| output: false
+#| message: false
+#| warning: false
+library(rtracklayer)
+library(ChIPpeakAnno)
+library(RColorBrewer)
+library(ggplot2)
+library(paletteer)
+library(ggplot2)
+library(RColorBrewer)
+library(BSgenome.Drerio.UCSC.danRer11)
+library(TxDb.Drerio.UCSC.danRer11.refGene)
+library(seqinr)
+library(ChIPseeker)
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+library(MotifDb)
+library(ATACseqQC)
+library(DiffBind)
+library(EnrichedHeatmap)
+library(circlize)
+library(DiffBind)
+library(DESeq2)
+library(umap)
+library(monaLisa)
+library(JASPAR2020)
+library(TFBSTools)
+library(dplyr)
+library(msigdbr)
+library(clusterProfiler)
+```
+***note***: I'm using 'ml load rstudio/1.4.1717 R/4.2.2'\
+Saving variables in global_vars.sh so they are available in bash
+```{R global_vars, eval=FALSE}
+global.vars=list(workdir=workdir)
+global.vars.sh="#!/usr/bin/env bash"
+for (i in 1:length(global.vars)){
+global.vars.sh=c(global.vars.sh,paste0(names(global.vars)[i],"=",as.vector(sapply(global.vars,"[",1)[i])))
+}
+write.table(global.vars.sh,"global_vars.sh",quote=FALSE,row.names = FALSE,col.names = FALSE)
+```
+# ENCODE ATAC pipeline on P3F embryos
+```{bash encode_pipe_p3f, eval=FALSE}
+source global_vars.sh
+cd $workdir
+sbatch run_encode_atac_p3f.sh
+```
+# ENCODE ATAC pipeline on Control embryos
+```{bash encode_pipe_ctrl, eval=FALSE}
+source global_vars.sh
+cd $workdir
+echo $workdir
+sbatch run_encode_atac_ctrl.sh
+```
+# croo to get outputs
+```{bash croo-p3f, eval=FALSE}
+encodedir=$workdir/atac/e3dfd768-1622-434f-9f1c-d153b036d717
+outdir=$workdir/encode_atac_p3f
+mkdir -p $outdir
+cd $encodedir
+ml ENCODE/caper/2.3.2
+croo metadata.json --out-dir $outdir
+
+encodedir=$workdir$atac/0357e3ef-c6af-4a2f-b710-d0b8d61b48d5
+outdir=$workdir$encode_atac_ctrl
+mkdir -p $outdir
+cd $encodedir
+ml ENCODE/caper/2.3.2
+croo metadata.json --out-dir $outdir
+```
+# differential chromatin accessibility 
+```{r}
+#| label: atac-diffbind-samples
+#| cache: false
+samples <- data.frame(
+ SampleID=c("ctrl_rep1","ctrl_rep2","p3f_rep1","p3f_rep2"),
+ Condition=rep(c("control","p3f"),each=2),
+ Tissue=rep("zebrafish",4),
+ Factor=rep(c("ctrl","p3f"),each=2),
+ Replicate=c(1:2,1:2),
+ bamReads=c(
+ "$workdir/encode_atac_ctrl/align/rep1/JPK0045_S2_L001_R1_001.trim.srt.nodup.no_chrM_MT.bam",
+ "$workdir/encode_atac_ctrl/align/rep2/JPK0047_S4_L001_R1_001.trim.srt.nodup.no_chrM_MT.bam",
+ "$workdir/encode_atac_p3f/align/rep1/JPK0044_S1_L001_R1_001.trim.srt.nodup.no_chrM_MT.bam",
+ "$workdir/pax3foxo1_analysis/encode_atac_p3f/align/rep2/JPK0046_S3_L001_R1_001.trim.srt.nodup.no_chrM_MT.bam"
+ ),
+ Peaks=c(
+  "$workdir/encode_atac_ctrl/peak/overlap_reproducibility/overlap.optimal_peak.narrowPeak.gz",
+ "$workdir/encode_atac_ctrl/peak/overlap_reproducibility/overlap.optimal_peak.narrowPeak.gz",
+ "$workdir/encode_atac_p3f/peak/overlap_reproducibility/overlap.optimal_peak.narrowPeak.gz",
+ "$workdir/encode_atac_p3f/peak/overlap_reproducibility/overlap.optimal_peak.narrowPeak.gz"
+ ),
+ PeakCaller=rep("narrow",4),
+ PeakFormat=rep("macs",4))
+# checking peaks path
+file.exists(samples$Peaks)
+# checking bam path
+file.exists(samples$bamReads)
+# if every path above is TRUE proceed
+atac.dba <- dba(sampleSheet=samples)
+# heatmap of correlation of samples
+plot(atac.dba,margin=15)
+#| label: atac-dba-count
+#| dependson: atac-diffbind-setup
+#| cache: false
+readme='summit=200 (default) minoverlap=2'
+atac <- dba.count(atac.dba,minOverlap=2,bParallel=TRUE)
+saveRDS(atac,file="data/atac_after_dba_count.rds")
+
+#| label: atac-dba-analyze
+#| cache: false
+#| dependson: atac-dba-count
+#| eval: false
+plot(atac,margin=15)
+# # Establishing a contrast using factor in samples (control vs p3f)
+# for new runs comparing multiple EF constructs
+atac <- dba.contrast(atac,categories=DBA_FACTOR,minMembers = 2)
+# differential analysis using DESeq2
+atac <- dba.analyze(atac)
+# This is correlation using only differentially bound sites
+plot(atac,contrast=1,margin=15)
+saveRDS(atac,file="data/atac_after_dba_analyze.rds")
+
+# retrieving differentially bound sites
+# load saved atac rds
+atac = readRDS(file="data/atac_after_dba_analyze.rds")
+readme='summit=200 (default) minoverlap=2'
+for (i in 1){
+ contrast=paste0(atac$contrasts[[i]]$name1,"_vs_",atac$contrasts[[i]]$name2)
+ atac.db.deseq <- dba.report(atac,contrast=i)
+ atac.db.deseq.all <- dba.report(atac,contrast=i,th=1)
+ # sorting...
+ std.seqlevels=paste0("chr",1:25)
+ atac.db.deseq <- keepSeqlevels(atac.db.deseq,std.seqlevels,pruning.mode = "tidy")
+ atac.db.deseq <- sort(atac.db.deseq)
+ atac.db.deseq.df = data.frame(seqnames(atac.db.deseq),start(atac.db.deseq),end(atac.db.deseq),
+  paste0("ATAC_",contrast,"_",1:length(atac.db.deseq)),atac.db.deseq$Fold)
+ write.table(atac.db.deseq.df,file=paste0("ATAC_",contrast,"_peaks_DiffBind_ovl2_2reps.bed"),quote = FALSE,
+  sep="\t",row.names=FALSE,col.names = FALSE)
+ # positive fold means increased binding affinity in the treatment group compared to
+ # control
+ sess.info <- sessionInfo()
+ save(list=c("readme","atac","atac.db.deseq","sess.info"),file=paste0("ATAC_",contrast,"_peaks_DiffBind_ovl2_2reps.RData"))
+}
+
+# load saved atac rds
+atac = readRDS(file="data/atac_after_dba_analyze.rds")
+ # Plots
+dba.plotPCA(atac)
+
+#| label: make-txdb-gff
+#| cache: false
+#| message: false
+#| warning: false
+# make txdb from gff file
+# TxDb.danRer11.refGene.gtf=makeTxDbFromGFF("danRer11.refGene.gtf.gz")
+TxDb.danRer11.ensGene.gtf=makeTxDbFromGFF("danRer11.ensGene.gtf.gz")
+
+#| cache: false
+atac.peak.anno=annotatePeak(atac.db.deseq, TxDb =TxDb.danRer11.ensGene.gtf)
+
+atac.fold.co = 1
+atac.padj.co=0.05
+# get peaks annotation that have differential accessibility
+atac.peak.anno.gr=as.GRanges(atac.peak.anno)
+# Fold in diffBind result is actually in log2 form.
+atac.up.gr=atac.peak.anno.gr[atac.peak.anno.gr$Fold >= log2(atac.fold.co) & !is.na(atac.peak.anno.gr$FDR) & atac.peak.anno.gr$FDR <= atac.padj.co]
+atac.up.bed = data.frame(atac.up.gr[,0])
+atac.up.bed[,4]=paste0("atac_up_",1:length(atac.up.gr))
+write.table(atac.up.bed,"atac_up_sum75.bed",quote=FALSE,sep="\t",row.names = FALSE,col.names = FALSE)
+atac.dwn.gr=atac.peak.anno.gr[atac.peak.anno.gr$Fold <= log2(atac.fold.co) & !is.na(atac.peak.anno.gr$FDR) & atac.peak.anno.gr$FDR <= atac.padj.co]
+atac.dwn.bed = data.frame(atac.dwn.gr[,0])
+atac.dwn.bed[,4]=paste0("atac_down_",1:length(atac.dwn.gr))
+write.table(atac.dwn.bed,"atac_down_sum75.bed",quote=FALSE,sep="\t",row.names = FALSE,col.names = FALSE)
+# get the center of peak
+targets.gain=resize(atac.up.gr,fix="center",width=1)
+targets.loss=resize(atac.dwn.gr,fix="center",width=1)
+# plot ATAC profile that are significantly different
+partition=c(rep(paste0("Increased (",length(targets.gain),")"),length(targets.gain)),
+             rep(paste0("Decreased (",length(targets.loss),")"),length(targets.loss)))
+partition=factor(partition,
+                 levels=c(paste0("Increased (",length(targets.gain),")"),paste0("Decreased (",length(targets.loss),")")))
+
+#| label: read_bw_atac
+#| eval: false
+# read in first atac
+targets=c(targets.gain,targets.loss)
+bw.gr=import("/gpfs0/home1/gdkendalllab/lab/analyses/cenny/pax3foxo1_analysis/encode_atac_ctrl/signal/pooled-rep/rep.pooled.fc.signal.bigwig")
+name1="ctrl"
+plot.name1="CTRL"
+bw.gr=keepStandardChromosomes(bw.gr,pruning.mode = "tidy")
+mat1=normalizeToMatrix(bw.gr,targets,value_column = "score",extend=3000, mean_mode = "w0", w = 50,smooth=TRUE)
+# read in second atac
+bw2.gr=import("/gpfs0/home1/gdkendalllab/lab/analyses/cenny/pax3foxo1_analysis/encode_atac_p3f/signal/pooled-rep/rep.pooled.fc.signal.bigwig")
+name2="p3f"
+plot.name2="P3F"
+bw2.gr=keepStandardChromosomes(bw2.gr,pruning.mode = "tidy")
+mat2=normalizeToMatrix(bw2.gr,targets,value_column = "score",extend=3000,mean_mode="w0",w=50,smooth=TRUE)
+mat=list(mat1,mat2)
+saveRDS(mat,file="data/atac_bw_mat.rds")
+```
+# HOMER at more accessible sites in P3F - used for Figure 4C
+```{bash homer_atac_up, eval=FALSE}
+source global_vars.sh
+cd $workdir
+outdir=$workdir/homer_atac_up
+peakfile=$workdir/atac_up.bed
+echo $outdir
+echo $peakfile
+mkdir -p $outdir
+sbatch \
+ --export=peakfile=$peakfile,outdir=$outdir \
+ run_homer_atac_motif.sh
+```
+# HOMER at less accessible sites in P3F - used for Figure 4C, S5B
+```{bash homer_atac_dwn, eval=FALSE}
+source global_vars.sh
+cd $workdir
+outdir=$workdir/homer_atac_down
+peakfile=$workdir/atac_down.bed
+echo $outdir
+echo $peakfile
+mkdir -p $outdir
+sbatch \
+ --export=peakfile=$peakfile,outdir=$outdir \
+ run_homer_atac_motif.sh
+```
+public ATAC-seq data from GSE130944 and GSE101779 during zebrafish development were downloaded
+samples were similarly run through the ENCODE ATACseq pipeline
+
+
+
+
+# Activity-By-Contact Model
+```{bash}
+workdir="path/to/working/directory"
+```
+## P3F Unzip tagAlign, sort according to chrom.size, zip it with bgzip and index with tabix.
+```{bash unzip_tabix_atac, eval=FALSE}
+source global_vars.sh
+cd $workdir
+echo $(pwd)
+sbatch --account=gdkendalllab \
+ --cpus-per-task=4 \
+ --partition=himem \
+ --output=r_unzip_tabix_atac_%j.out \
+ --wrap "ml GCC/10.3.0; ml BCFtools/1.12; ml BEDTools/2.30.0; set -x;\
+ cd /home/gdkendalllab/lab/analyses/cenny/pax3foxo1_analysis/encode_atac_p3f/align/; \
+ gunzip -c rep1/JPK0044_S1_L001_R1_001.trim.srt.nodup.no_chrM_MT.tn5.tagAlign.gz | \
+ bedtools sort -faidx /home/gdkendalllab/lab/references/fasta/danRer11.chrom.sizes -i | bgzip > rep1/JPK0044_S1_L001_R1_001.trim.srt.nodup.no_chrM_MT.tn5.tagAlign.bgzip.gz; \
+ tabix -p bed rep1/JPK0044_S1_L001_R1_001.trim.srt.nodup.no_chrM_MT.tn5.tagAlign.bgzip.gz; \
+ gunzip -c rep2/JPK0046_S3_L001_R1_001.trim.srt.nodup.no_chrM_MT.tn5.tagAlign.gz | bedtools sort -faidx /home/gdkendalllab/lab/references/fasta/danRer11.chrom.sizes -i | bgzip > rep2/JPK0046_S3_L001_R1_001.trim.srt.nodup.no_chrM_MT.tn5.tagAlign.bgzip.gz; \
+ tabix -p bed rep2/JPK0046_S3_L001_R1_001.trim.srt.nodup.no_chrM_MT.tn5.tagAlign.bgzip.gz"
+```
+## CNTL Unzip tagAlign, sort according to chrom.size, zip it with bgzip and index with tabix.
+```{bash unzip_tabix_atac_ctrl, eval=FALSE}
+source global_vars.sh
+cd $workdir
+echo $(pwd)
+sbatch --account=gdkendalllab \
+ --cpus-per-task=4 \
+ --partition=himem \
+ --output=r_unzip_tabix_atac_%j.out \
+ --wrap "ml GCC/10.3.0; ml BCFtools/1.12; ml BEDTools/2.30.0; set -x;\
+ cd /home/gdkendalllab/lab/analyses/cenny/pax3foxo1_analysis/encode_atac_ctrl/align/; \
+ gunzip -c rep1/JPK0045_S2_L001_R1_001.trim.srt.nodup.no_chrM_MT.tn5.tagAlign.gz | \
+ bedtools sort -faidx /home/gdkendalllab/lab/references/fasta/danRer11.chrom.sizes -i | bgzip > rep1/JPK0045_S2_L001_R1_001.trim.srt.nodup.no_chrM_MT.tn5.tagAlign.sort.bgzip.gz; \
+ tabix -p bed rep1/JPK0045_S2_L001_R1_001.trim.srt.nodup.no_chrM_MT.tn5.tagAlign.sort.bgzip.gz; \
+ gunzip -c rep2/JPK0047_S4_L001_R1_001.trim.srt.nodup.no_chrM_MT.tn5.tagAlign.gz | \
+ bedtools sort -faidx /home/gdkendalllab/lab/references/fasta/danRer11.chrom.sizes -i | bgzip > rep2/JPK0047_S4_L001_R1_001.trim.srt.nodup.no_chrM_MT.tn5.tagAlign.sort.bgzip.gz; \
+ tabix -p bed rep2/JPK0047_S4_L001_R1_001.trim.srt.nodup.no_chrM_MT.tn5.tagAlign.sort.bgzip.gz"
+```
+## Merging K27ac for input to ABC
+```{bash, eval=FALSE}
+source global_vars.sh
+cd $workdir
+echo $(pwd)
+infiles="/home/gdkendalllab/lab/analyses/shared/P3F_at6hpf/h3k27ac/bams/P3F_1_ds.bam /home/gdkendalllab/lab/analyses/shared/P3F_at6hpf/h3k27ac/bams/P3F_2_ds.bam"
+outfile="/home/gdkendalllab/lab/analyses/cenny/pax3foxo1_analysis/h3k27ac/merged/P3F_merged_sorted.bam"
+mkdir -p $(dirname $outfile)
+sbatch --account=gdkendalllab \
+ --output=r_samtools_merge_k27ac_%j.out \
+ --export=infiles="${infiles}",outfile="${outfile}" \
+  run_samtools_merge.sh
+```
+## New config.yaml
+```{bash, eval=FALSE}
+cat ~/opt/ABC-Enhancer-Gene-Prediction_2/ABC-Enhancer-Gene-Prediction/config/config.yaml
+```
+## New biosamples
+```{bash, eval=FALSE}
+cat ~/opt/ABC-Enhancer-Gene-Prediction_2/ABC-Enhancer-Gene-Prediction/config/config_biosamples_p3f_rerun2.tsv
+```
+## ABC
+```{bash rerun2_abc, eval=FALSE}
+source global_vars.sh
+cd $workdir
+echo $(pwd)
+sbatch --account=gdkendalllab \
+ --partition=himem \
+ --cpus-per-task=4 \
+ run_abc_enhancer2.sh
+```
+Running ABC with down-sampled K27ac and with no Quantile normalization in ABC. 
+The results are in /home/gdkendalllab/lab/analyses/cenny/pax3foxo1_analysis/ABC-results-DS-rerun3
+## ABC on zebrafish brain and muscle
+#### biosamples
+I'm running it from here so we have a record. Note that even though below I showed the content of config_brain_muscle.yaml, the program actually run config.yaml
+```{bash, eval=FALSE}
+cat ~/opt/ABC-Enhancer-Gene-Prediction_2/ABC-Enhancer-Gene-Prediction/config/config_biosamples_brain_muscle.tsv
+```
+#### config.yaml
+```{bash, eval=FALSE}
+cat ~/opt/ABC-Enhancer-Gene-Prediction_2/ABC-Enhancer-Gene-Prediction/config/config_brain_muscle.yaml
+```
+#### ABC
+```{bash rerun2_abc, eval=FALSE}
+source global_vars.sh
+cd $workdir
+echo $(pwd)
+sbatch --account=gdkendalllab \
+ --partition=himem \
+ --cpus-per-task=4 \
+ run_abc_enhancer2.sh
+```

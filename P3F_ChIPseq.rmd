@@ -1,0 +1,1177 @@
+---
+title: "Rhabdomyosarcoma fusion oncoprotein initially pioneers a neural signature in vivo - Initial ChIP-seq Analysis"
+author: "Jack Kucinski"
+data: "04-10-2025"
+---
+this rmd file contains initial analysis of PAX3::FOXO1, PAX3::FOXO1-minusHD, and H3K27ac ChIP-seq,
+which includes running through pipelines and figures where the combination across datasets is minimal
+
+# pcPAX3::FOXO1 ChIP-seq analysis
+We completed ChIP-seq for PAX3::FOXO1 with 2 million zebrafish cells following mRNA injection at 6 hours post-fertilization
+The goal was to identify where and how the human PAX3::FOXO1 was initially binding to the zebrafish genome
+## make directories
+```{bash}
+WORKDIR="path/to/working/directory"
+mkdir chip/p3f/2mil_pcChIP
+mkdir chip/p3f/2mil_pcChIP/pipeline_outputs
+mkdir chip/p3f/2mil_pcChIP/outputs
+mkdir chip/p3f/2mil_pcChIP/outputs/peaks
+mkdir chip/p3f/2mil_pcChIP/outputs/annotation
+mkdir chip/p3f/2mil_pcChIP/outputs/homer
+mkdir chip/p3f/2mil_pcChIP/outputs/annotation
+mkdir chip/p3f/2mil_pcChIP/outputs/heatmaps
+mkdir chip/p3f/2mil_pcChIP/outputs/zebrafish_dev
+mkdir chip/p3f/2mil_pcChIP/outputs/zebrafish_dev/inputs
+mkdir chip/p3f/2mil_pcChIP/outputs/motifs/
+mkdir chip/p3f/2mil_pcChIP/outputs/motifs/beds
+```
+PAX3::FOXO1 ChIP-seq data can be downloaded from GSE270319
+## PerCell pipeline (https://github.com/lextallan/PerCell)
+```{bash}
+ml nextflow/default
+ 
+nextflow run PC.nf --input # path to input file \
+    --aligner bowtie2 \
+    --experimental zebrafish \
+    --spikein human \
+    --outdir 'chip/p3f/2mil_pcChIP/pipeline_outputs' \
+    --skip_trimming false \
+    --skip_fastqc true \
+    -profile singularity \
+    --narrow_peak \
+    --skip_idr false \
+    --idr_cutoff 0.05 \
+    --skip_motif true \
+    --bdgcmp_method 'FE' \
+    --override_spikeinfail false \
+    --skip_downsample false \
+    -qs 16 \
+    --macs2_cutoff 0.2218 \
+    --macs2_method 'ppois' \
+    --skip_consensus true
+```
+## diffBind on PAX3::FOXO1 peaks
+```{r}
+library(DiffBind)
+library(tidyverse)
+setwd("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/peaks")
+
+samples <- data.frame(
+ SampleID=c("p3f_rep1","p3f_rep2","cntl_rep1","cntl_rep2"),
+ Condition=rep(c("p3f","cntl"),each=2),
+ Tissue=rep("zebrafish",4),
+ Factor=rep(c("p3f","cntl"),each=2),
+ Replicate=c(1:2,1:2),
+ bamReads=c(
+ "$WORKDIR/chip/p3f/2mil_pcChIP/pipeline_outputs/bowtie2/P3F_1_ds.bam",
+ "$WORKDIR/chip/p3f/2mil_pcChIP/pipeline_outputs/bowtie2/P3F_1_ds.bam",
+ "$WORKDIR/chip/p3f/2mil_pcChIP/pipeline_outputs/bowtie2/P3F_1_ds.bam",
+ "$WORKDIR/chip/p3f/2mil_pcChIP/pipeline_outputs/bowtie2/P3F_1_ds.bam"),
+ControlID=c("p3f_rep1","p3f_rep2","cntl_rep1","cntl_rep2"),
+bamControl=c( 
+ "$WORKDIR/chip/p3f/2mil_pcChIP/pipeline_outputs/bowtie2/P3F_1_ds.bamP3F-Input_1_ds.bam",
+ "$WORKDIR/chip/p3f/2mil_pcChIP/pipeline_outputs/bowtie2/P3F_1_ds.bamP3F-Input_2_ds.bam",
+ "$WORKDIR/chip/p3f/2mil_pcChIP/pipeline_outputs/bowtie2/P3F_1_ds.bamCNTL-Input_2_ds.bam",
+ "$WORKDIR/chip/p3f/2mil_pcChIP/pipeline_outputs/bowtie2/P3F_1_ds.bamCNTL-Input_1_ds.bam"),
+ Peaks=c(
+  "$WORKDIR/chip/p3f/2mil_pcChIP/pipeline_outputs/bowtie2/callpeak_idr/P3F_1_ds.bamP3F_idrValues.bed",
+  "$WORKDIR/chip/p3f/2mil_pcChIP/pipeline_outputs/bowtie2/callpeak_idr/P3F_1_ds.bamP3F_idrValues.bed",
+  "$WORKDIR/chip/p3f/2mil_pcChIP/pipeline_outputs/bowtie2/callpeak_idr/P3F_1_ds.bamP3F_idrValues.bed",
+  "$WORKDIR/chip/p3f/2mil_pcChIP/pipeline_outputs/bowtie2/callpeak_idr/P3F_1_ds.bamP3F_idrValues.bed"),
+ PeakFormat=rep("narrow",4))
+file.exists(samples$Peaks)
+file.exists(samples$bamReads)
+
+dbObj <- dba(sampleSheet=samples)
+dbObj <- dba.count(dbObj, bUseSummarizeOverlaps=TRUE)
+dbObj <- dba.contrast(dbObj, categories=DBA_FACTOR, minMembers = 2)
+dbObj <- dba.analyze(dbObj, method=DBA_ALL_METHODS)
+
+res_deseq <- dba.report(dbObj, method=DBA_EDGER, contrast = 1, th=1)
+out <- as.data.frame(res_deseq)
+pcP3F_deseq <- out %>% 
+  filter(p.value < 0.05 & Fold < 0) %>% 
+  select(seqnames, start, end)
+write.table(pcP3F_deseq, file="pcP3F_diffBind.bed", sep="\t", quote=F, row.names=F, col.names=F)
+```
+## PCA to CNTLs - used to generated Figure S4C, S4D
+```{r}
+library(DiffBind)
+library(tidyverse)
+setwd("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/annotation")
+
+samples <- data.frame(
+ SampleID=c("p3f_rep1","p3f_rep2","cntl_rep1","cntl_rep2"),
+ Condition=rep(c("p3f","cntl"),each=2),
+ Tissue=rep("zebrafish",4),
+ Factor=rep(c("p3f","cntl"),each=2),
+ Replicate=c(1:2,1:2),
+ bamReads=c(
+ "$WORKDIR/chip/p3f/2mil_pcChIP/pipeline_outputs/bowtie2/P3F_1_ds.bam",
+ "$WORKDIR/chip/p3f/2mil_pcChIP/pipeline_outputs/bowtie2/P3F_1_ds.bam",
+ "$WORKDIR/chip/p3f/2mil_pcChIP/pipeline_outputs/bowtie2/P3F_1_ds.bam",
+ "$WORKDIR/chip/p3f/2mil_pcChIP/pipeline_outputs/bowtie2/P3F_1_ds.bam"),
+ControlID=c("p3f_rep1","p3f_rep2","cntl_rep1","cntl_rep2"),
+bamControl=c( 
+ "$WORKDIR/chip/p3f/2mil_pcChIP/pipeline_outputs/bowtie2/P3F_1_ds.bamP3F-Input_1_ds.bam",
+ "$WORKDIR/chip/p3f/2mil_pcChIP/pipeline_outputs/bowtie2/P3F_1_ds.bamP3F-Input_2_ds.bam",
+ "$WORKDIR/chip/p3f/2mil_pcChIP/pipeline_outputs/bowtie2/P3F_1_ds.bamCNTL-Input_2_ds.bam",
+ "$WORKDIR/chip/p3f/2mil_pcChIP/pipeline_outputs/bowtie2/P3F_1_ds.bamCNTL-Input_1_ds.bam"),
+ Peaks=c(
+  "$WORKDIR/chip/p3f/2mil_pcChIP/pipeline_outputs/bowtie2/callpeak_idr/P3F_1_ds.bamP3F_idrValues.bed",
+  "$WORKDIR/chip/p3f/2mil_pcChIP/pipeline_outputs/bowtie2/callpeak_idr/P3F_1_ds.bamP3F_idrValues.bed",
+  "$WORKDIR/chip/p3f/2mil_pcChIP/pipeline_outputs/bowtie2/callpeak_idr/P3F_1_ds.bamP3F_idrValues.bed",
+  "$WORKDIR/chip/p3f/2mil_pcChIP/pipeline_outputs/bowtie2/callpeak_idr/P3F_1_ds.bamP3F_idrValues.bed"),
+ PeakFormat=rep("narrow",4))
+file.exists(samples$Peaks)
+file.exists(samples$bamReads)
+
+dbObj <- dba(sampleSheet=samples)
+dbObj.counts <- dba.count(dbObj, bParallel=TRUE)
+pdf("pca_pcChIP.pdf")
+plot(dbObj.counts,margin=15)
+dba.plotPCA(dbObj.counts)
+dev.off()
+```
+## P3F peak annotation - used to generated Figure 2D, S4D
+``` {r}
+library("ChIPseeker")
+library("org.Dr.eg.db")
+library(clusterProfiler)
+library("TxDb.Drerio.UCSC.danRer11.refGene")
+OrgDb="org.Dr.eg.db"
+library(GenomicFeatures)
+library("TxDb.Drerio.UCSC.danRer11.refGene")
+setwd("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/annotation")
+
+txdb=TxDb.Drerio.UCSC.danRer11.refGene
+peak <- readPeakFile("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind.bed)
+
+peakAnno <- annotatePeak(peak, tssRegion=c(-3000, 3000),
+                         TxDb=txdb, annoDb="org.Dr.eg.db")
+plotAnnoPie(peakAnno)
+pdf("P3FChIP_anno.pdf")
+plotAnnoPie(peakAnno)
+plotDistToTSS(peakAnno,
+              title="Distribution of transcription factor binding loci\nrelative to TSS")
+bp <- enrichGO(as.data.frame(peakAnno)$geneId, OrgDb, ont="BP", readable=TRUE)
+dotplot(bp)
+bp <- enrichGO(as.data.frame(peakAnno)$geneId, OrgDb, ont="MF", readable=TRUE)
+dotplot(bp)
+bp <- enrichGO(as.data.frame(peakAnno)$geneId, OrgDb, ont="CC", readable=TRUE)
+dotplot(bp)
+dev.off()
+write.csv(peakAnno, file = "P3FChIP_anno.csv")
+```
+## Motif at PAX3::FOXO1 binding sites - used to generated Figure 2F
+```{bash}
+cd $WORKDIR
+module purge
+module load homer/4.11.1
+
+findMotifsGenome.pl \
+  $WORKDIR/chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind.bed \
+  # path to danRer11.fa \
+  outputs/homer/ \
+  -size 75 \
+  -p 30
+```
+## Heatmap at PAX3::FOXO1 binding sites - used to generated Figure 2C
+```{bash}
+module purge
+module load GCC/9.3.0 \
+            OpenMPI/4.0.3 \
+            deepTools/3.3.1-Python-3.8.2
+
+computeMatrix reference-point \
+  -S  $WORKDIR/chip/p3f/2mil_pcChIP/pipeline_outputs/macs2_bigwigs/FE/CNTL_1_signal.bigWig
+      $WORKDIR/chip/p3f/2mil_pcChIP/pipeline_outputs/macs2_bigwigs/FE/CNTL_2_signal.bigWig \
+      $WORKDIR/chip/p3f/2mil_pcChIP/pipeline_outputs/macs2_bigwigs/FE/P3F_1_signal.bigWig \
+      $WORKDIR/chip/p3f/2mil_pcChIP/pipeline_outputs/macs2_bigwigs/FE/P3F_2_signal.bigWig \
+  -R $WORKDIR/chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind.bed \
+  --referencePoint center \
+  -b 3000 \
+  -a 3000 \
+  -bs=1 \
+  -p=max \
+  --missingDataAsZero \
+  -o outputs/heatmaps/p3f_diffBind_signal.matrix.gz
+plotHeatmap \
+      -m outputs/heatmaps/p3f_diffBind_signal.matrix.gz \
+      -o outputs/heatmaps/p3f_diffBind_signal.pdf \
+      --regionsLabel 'signal' \
+      --samplesLabel cntl_1 cntl_2 p3f_1 p3f_2 \
+      --colorMap=Purples
+```
+## PAX3::FOXO1 binding overlap to developmental ChromHMM states - used for Figure S4H
+```{bash}
+ml load GCC/10.3.0 \
+        BEDTools/2.30.0
+
+bedtools intersect \
+    -wb \
+    -a $WORKDIR/chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind.bed \
+    -b dome_chromHMM.bed \ # downloaded from DANIO-CODE
+        > $WORKDIR/chip/p3f/2mil_pcChIP/outputs/zebrafish_dev/p3f_domeChromHMM.bed
+
+bedtools intersect \
+    -wb \
+    -a $WORKDIR/chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind.bed \
+    -b epi75_chromHMM.bed \ # downloaded from DANIO-CODE
+        > $WORKDIR/chip/p3f/2mil_pcChIP/outputs/zebrafish_dev/p3f_epi75ChromHMM.bed
+```
+## Averging bigwigs for histone marks in 6 hpf zebrafish
+``` {bash}
+cd $WORKDIR
+# bigwigs files obtained from GSE175951
+ml purge
+ml load GCCcore/11.2.0 \
+        Python/3.9.6
+
+pip install deeptools
+
+rep1Array=( $WORKDIR/chip/p3f/2mil_pcChIP/outputs/zebrafish_dev/inputs/wu_2021_GSE175951/GSM5351834_Shield_ctrl_H3K27me3_rep1.bw
+            $WORKDIR/chip/p3f/2mil_pcChIP/outputs/zebrafish_dev/inputs/inputs/wu_2021_GSE175951/GSM5351840_Shield_ctrl_H2AK119ub_rep1.bw
+            $WORKDIR/chip/p3f/2mil_pcChIP/outputs/zebrafish_dev/inputs/inputs/wu_2021_GSE175951/GSM5351848_Shield_ctrl_H3K4me3_rep1.bw
+            $WORKDIR/chip/p3f/2mil_pcChIP/outputs/zebrafish_dev/inputs/inputs/wu_2021_GSE175951/GSM5351854_Shield_ctrl_H3K4me1_rep1.bw
+            $WORKDIR/chip/p3f/2mil_pcChIP/outputs/zebrafish_dev/inputs/inputs/wu_2021_GSE175951/GSM5351860_Shield_ctrl_H3K27ac_rep1.bw
+            $WORKDIR/chip/p3f/2mil_pcChIP/outputs/zebrafish_dev/inputs/inputs/wu_2021_GSE175951/GSM5396319_Shield_ctrl_ATAC_seq_rep1.bw)
+R1=${rep1Array[$SLURM_ARRAY_TASK_ID]}
+
+rep2Array=( $WORKDIR/chip/p3f/2mil_pcChIP/outputs/zebrafish_dev/inputs/inputs/wu_2021_GSE175951/GSM5351835_Shield_ctrl_H3K27me3_rep2.bw
+            $WORKDIR/chip/p3f/2mil_pcChIP/outputs/zebrafish_dev/inputs/inputs/wu_2021_GSE175951/GSM5351841_Shield_ctrl_H2AK119ub_rep2.bw
+            $WORKDIR/chip/p3f/2mil_pcChIP/outputs/zebrafish_dev/inputs/inputs/wu_2021_GSE175951/GSM5351849_Shield_ctrl_H3K4me3_rep2.bw
+            $WORKDIR/chip/p3f/2mil_pcChIP/outputs/zebrafish_dev/inputs/inputs/wu_2021_GSE175951/GSM5667178_Shield_ctrl_H3K4me1_rep2.bw
+            $WORKDIR/chip/p3f/2mil_pcChIP/outputs/zebrafish_dev/inputs/inputs/wu_2021_GSE175951/GSM5351861_Shield_ctrl_H3K27ac_rep2.bw
+            $WORKDIR/chip/p3f/2mil_pcChIP/outputs/zebrafish_dev/inputs/inputs/wu_2021_GSE175951/GSM5396320_Shield_ctrl_ATAC_seq_rep2.bw)
+R2=${rep2Array[$SLURM_ARRAY_TASK_ID]}
+
+NameArray=(   Shield_ctrl_H3K27me3
+              Shield_ctrl_H2AK119ub
+              Shield_ctrl_H3K4me3
+              Shield_ctrl_H3K4me1
+              Shield_ctrl_H3K27ac
+              Shield_ctrl_ATAC)
+nameArray=${NameArray[$SLURM_ARRAY_TASK_ID]}
+
+bigwigAverage \
+  -b  ${R1} \
+      ${R2} \
+  --binSize 1 \
+  -p 12 \
+  -o $WORKDIR/chip/p3f/2mil_pcChIP/outputs/zebrafish_dev/${nameArray}_average.bigwig
+```
+## Identify bound and unbound composite and homeobox motifs
+```{bash}
+set -e 
+module purge
+module load homer/4.11.1
+
+scanMotifGenomeWide.pl \
+    chip/p3f/2mil_pcChIP/outputs/homer/knownResults/homermotif20.motif \
+    danRer11.fa \
+    -bed \
+    > chip/p3f/2mil_pcChIP/outputs/motifs/pax3foxo1Motif.bed
+
+scanMotifGenomeWide.pl \
+    chip/p3f/2mil_pcChIP/outputs/homer/knownResults/motif1.motif \
+    danRer11.fa \
+    -bed \
+    > chip/p3f/2mil_pcChIP/outputs/motifs/pax7Motif.bed
+
+ml purge
+ml load GCC/10.3.0 \
+        BEDTools/2.30.0
+bedtools subtract \
+    -A \
+    -a chip/p3f/2mil_pcChIP/outputs/motifs/pax3foxo1Motif.bed \
+    -b chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind.bed \
+        > chip/p3f/2mil_pcChIP/outputs/motifs/beds/pax3foxo1Motif_unbound.bed
+
+bedtools intersect \
+    -wa \
+    -u \
+    -a chip/p3f/2mil_pcChIP/outputs/motifs/pax3foxo1Motif.bed \
+    -b chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind.bed \
+        > outputs/motifs/beds/pax3foxo1Motif_bound.bed
+
+bedtools subtract \
+    -A \
+    -a chip/p3f/2mil_pcChIP/outputs/motifs/pax7Motif.bed \
+    -b chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind.bed \
+        > outputs/motifs/beds/pax7Motif_unbound.bed
+
+bedtools intersect \
+    -wa \
+    -u \
+    -a chip/p3f/2mil_pcChIP/outputs/motifs/pax7Motif.bed \
+    -b chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind.bed \
+        > outputs/motifs/beds/pax7Motif_bound.bed
+
+bedtools subtract \
+    -A \
+    -a chip/p3f/2mil_pcChIP/outputs/motifs/beds/pax7Motif_bound.bed \
+    -b chip/p3f/2mil_pcChIP/outputs/motifs/beds/pax3foxo1Motif_bound.bed \
+        > chip/p3f/2mil_pcChIP/outputs/motifs/beds/pax7Motif_bound_nonOv.bed
+
+bedtools subtract \
+    -A \
+    -a chip/p3f/2mil_pcChIP/outputs/motifs/beds/pax3foxo1Motif_bound.bed \
+    -b chip/p3f/2mil_pcChIP/outputs/motifs/beds/pax7Motif_bound.bed \
+        > chip/p3f/2mil_pcChIP/outputs/motifs/beds/pax3foxo1Motif_bound_nonOv.bed
+```
+
+
+
+
+
+# H3K27ac ChIP-seq analysis
+We completed ChIP-seq for H3K27ac with 1 million zebrafish cells following mRNA injection at 6 hours post-fertilization
+The goal was to identify H3K27ac localization changed following P3F injection
+## make directories
+```{bash}
+WORKDIR="path/to/working/directory"
+mkdir chip/h3k27ac/pcChIP/
+mkdir chip/h3k27ac/pcChIP/pipeline_outputs
+mkdir chip/h3k27ac/pcChIP/outputs
+mkdir chip/h3k27ac/pcChIP/outputs/peaks
+mkdir chip/h3k27ac/pcChIP/outputs/annotation
+mkdir chip/h3k27ac/pcChIP/outputs/heatmaps
+mkdir chip/h3k27ac/pcChIP/outputs/homer
+```
+H3K27ac ChIP-seq data can be downloaded from GSE270319
+## PerCell pipeline (https://github.com/lextallan/PerCell)
+```{bash}
+ml nextflow/default
+ 
+nextflow run PC.nf --input # path to input file \
+    --aligner bowtie2 \
+    --experimental zebrafish \
+    --spikein human \
+    --outdir 'chip/h3k27ac/pcChIP/pipeline_outputs' \
+    --skip_trimming false \
+    --skip_fastqc true \
+    -profile singularity \
+    --narrow_peak \
+    --skip_idr TRUE \
+    --idr_cutoff 0.05 \
+    --skip_motif true \
+    --bdgcmp_method 'FE' \
+    --override_spikeinfail false \
+    --skip_downsample false \
+    -qs 16 \
+    --macs2_cutoff 1.301 \
+    --macs2_method 'ppois' \
+    --skip_consensus false
+```
+## Relocating output files
+```{bash}
+cp chip/h3k27ac/pcChIP/pipeline_outputs/bowtie2/macs2_subcommands/1.301_cutoff/* chip/h3k27ac/pcChIP/pipeline_outputs/peaks/
+cp chip/h3k27ac/pcChIP/pipeline_outputs/bowtie2/macs2_bigwigs/* chip/h3k27ac/pcChIP/pipeline_outputs/bigwigs/
+# averaged bigwig files were made with deeptools and added to the same directory
+cp chip/h3k27ac/pcChIP/pipeline_outputs/bowtie2/downsample/* chip/h3k27ac/pcChIP/pipeline_outputs/bams/
+```
+## Differential Peak Calling
+```{r}
+library(DiffBind)
+library(tidyverse)
+setwd("$WORKDIR/chip/h3k27ac/pcChIP/outputs/peaks")
+
+# PAX3::FOXO1 Unique Peaks
+samples <- data.frame(
+ SampleID=c("p3f_rep1","p3f_rep2","cntl_rep1","cntl_rep2"),
+ Condition=rep(c("p3f","cntl"),each=2),
+ Tissue=rep("zebrafish",4),
+ Factor=rep(c("p3f","cntl"),each=2),
+ Replicate=c(1:2,1:2),
+ bamReads=c(
+ "$WORKDIR/chip/h3k27ac/pcChIP/pipeline_outputs/bams/P3F_1_ds.bam",
+ "$WORKDIR/chip/h3k27ac/pcChIP/pipeline_outputs/bams/P3F_2_ds.bam",
+ "$WORKDIR/chip/h3k27ac/pcChIP/pipeline_outputs/bams/Ctrl_1_ds.bam",
+ "$WORKDIR/chip/h3k27ac/pcChIP/pipeline_outputs/bams/Ctrl_2_ds.bam"),
+ ControlID=c("p3f_rep1","p3f_rep2","cntl_rep1","cntl_rep2"),
+ bamControl=c(
+ "$WORKDIR/chip/h3k27ac/pcChIP/pipeline_outputs/bams/JPK0037_ds.bam",
+ "$WORKDIR/chip/h3k27ac/pcChIP/pipeline_outputs/bams/JPK0041_ds.bam",
+ "$WORKDIR/chip/h3k27ac/pcChIP/pipeline_outputs/bams/JPK0039_ds.bam",
+ "$WORKDIR/chip/h3k27ac/pcChIP/pipeline_outputs/bams/JPK0043_ds.bam"),
+ Peaks=c(
+  "$WORKDIR/chip/h3k27ac/pcChIP/pipeline_outputs/peaks/P3F_consensus.bed",
+  "$WORKDIR/chip/h3k27ac/pcChIP/pipeline_outputs/peaks/P3F_consensus.bed",
+  "$WORKDIR/chip/h3k27ac/pcChIP/pipeline_outputs/peaks/P3F_consensus.bed",
+  "$WORKDIR/chip/h3k27ac/pcChIP/pipeline_outputs/peaks/P3F_consensus.bed"),
+ PeakFormat=rep("bed",4))
+file.exists(samples$Peaks)
+file.exists(samples$bamReads)
+file.exists(samples$bamControl)
+
+dbObj <- dba(sampleSheet=samples)
+dbObj <- dba.count(dbObj, bUseSummarizeOverlaps=TRUE, summits=FALSE)
+dbObj <- dba.contrast(dbObj, categories=DBA_FACTOR, minMembers = 2)
+dbObj <- dba.analyze(dbObj, method=DBA_ALL_METHODS)
+res_deseq <- dba.report(dbObj, method=DBA_DESEQ2, contrast = 1, th=1)
+out <- as.data.frame(res_deseq)
+H3K27Ac_diffBind_p3fUnique <- out %>% 
+  filter(FDR < 0.05 & Fold < 0) %>% 
+  select(seqnames, start, end)
+write.table(H3K27Ac_diffBind_p3fUnique, file="p3f.enriched_H3K27Ac.bed", sep="\t", quote=F, row.names=F, col.names=F)
+
+# CNTL Unique Peaks
+samples <- data.frame(
+ SampleID=c("cntl_rep1","cntl_rep2","p3f_rep1","p3f_rep2"),
+ Condition=rep(c("cntl","p3f"),each=2),
+ Tissue=rep("zebrafish",4),
+ Factor=rep(c("cntl","p3f"),each=2),
+ Replicate=c(1:2,1:2),
+ bamReads=c(
+ "$WORKDIR/chip/h3k27ac/pcChIP/pipeline_outputs/bams/Ctrl_1_ds.bam",
+ "$WORKDIR/chip/h3k27ac/pcChIP/pipeline_outputs/bams/Ctrl_2_ds.bam",
+ "$WORKDIR/chip/h3k27ac/pcChIP/pipeline_outputs/bams/P3F_1_ds.bam",
+ "$WORKDIR/chip/h3k27ac/pcChIP/pipeline_outputs/bams/P3F_2_ds.bam"),
+ ControlID=c("cntl_rep1","cntl_rep2","p3f_rep1","p3f_rep2"),
+ bamControl=c(
+ "$WORKDIR/chip/h3k27ac/pcChIP/pipeline_outputs/bams/JPK0039_ds.bam",
+ "$WORKDIR/chip/h3k27ac/pcChIP/pipeline_outputs/bams/JPK0043_ds.bam",
+ "$WORKDIR/chip/h3k27ac/pcChIP/pipeline_outputs/bams/JPK0037_ds.bam",
+ "$WORKDIR/chip/h3k27ac/pcChIP/pipeline_outputs/bams/JPK0041_ds.bam"),
+ Peaks=c(
+  "$WORKDIR/chip/h3k27ac/pcChIP/pipeline_outputs/peaks/Ctrl_consensus.bed",
+  "$WORKDIR/chip/h3k27ac/pcChIP/pipeline_outputs/peaks/Ctrl_consensus.bed",
+  "$WORKDIR/chip/h3k27ac/pcChIP/pipeline_outputs/peaks/Ctrl_consensus.bed",
+  "$WORKDIR/chip/h3k27ac/pcChIP/pipeline_outputs/peaks/Ctrl_consensus.bed"),
+ PeakFormat=rep("bed",4))
+file.exists(samples$Peaks)
+file.exists(samples$bamReads)
+file.exists(samples$bamControl)
+
+dbObj <- dba(sampleSheet=samples)
+dbObj <- dba.count(dbObj, bUseSummarizeOverlaps=TRUE, summits=FALSE)
+dbObj <- dba.contrast(dbObj, categories=DBA_FACTOR, minMembers = 2)
+dbObj <- dba.analyze(dbObj, method=DBA_ALL_METHODS)
+res_deseq <- dba.report(dbObj, method=DBA_DESEQ2, contrast = 1, th=1)
+out <- as.data.frame(res_deseq)
+H3K27Ac_diffBind_cntlUnique <- out %>% 
+  filter(FDR < 0.05 & Fold < 0) %>% 
+  select(seqnames, start, end)
+write.table(H3K27Ac_diffBind_cntlUnique, file="cntl.enriched_H3K27Ac.bed", sep="\t", quote=F, row.names=F, col.names=F)
+```
+## PCA - Figure 5SC
+```{r}
+library(DiffBind)
+library(tidyverse)
+setwd("$WORKDIR/chip/h3k27ac/pcChIP/outputs/annotation")
+
+samples <- data.frame(
+ SampleID=c("p3f_rep1","p3f_rep2","cntl_rep1","cntl_rep2"),
+ Condition=rep(c("p3f","cntl"),each=2),
+ Tissue=rep("zebrafish",4),
+ Factor=rep(c("p3f","cntl"),each=2),
+ Replicate=c(1:2,1:2),
+ bamReads=c(
+ "$WORKDIR/chip/h3k27ac/pcChIP/pipeline_outputs/bams/P3F_1_ds.bam",
+ "$WORKDIR/chip/h3k27ac/pcChIP/pipeline_outputs/bams/P3F_2_ds.bam",
+ "$WORKDIR/chip/h3k27ac/pcChIP/pipeline_outputs/bams/Ctrl_1_ds.bam",
+ "$WORKDIR/chip/h3k27ac/pcChIP/pipeline_outputs/bams/Ctrl_2_ds.bam"),
+ ControlID=c("p3f_rep1","p3f_rep2","cntl_rep1","cntl_rep2"),
+ bamControl=c(
+ "$WORKDIR/chip/h3k27ac/pcChIP/pipeline_outputs/bams/JPK0037_ds.bam",
+ "$WORKDIR/chip/h3k27ac/pcChIP/pipeline_outputs/bams/JPK0041_ds.bam",
+ "$WORKDIR/chip/h3k27ac/pcChIP/pipeline_outputs/JPK0039_ds.bam",
+ "$WORKDIR/chip/h3k27ac/pcChIP/pipeline_outputs/JPK0043_ds.bam"),
+ Peaks=c(
+  "$WORKDIR/chip/h3k27ac/pcChIP/pipeline_outputs/peaks/P3F_consensus.bed",
+  "$WORKDIR/chip/h3k27ac/pcChIP/pipeline_outputs/peaks/P3F_consensus.bed",
+  "$WORKDIR/chip/h3k27ac/pcChIP/pipeline_outputs/peaks/Ctrl_consensus.bed",
+  "$WORKDIR/chip/h3k27ac/pcChIP/pipeline_outputs/peaks/Ctrl_consensus.bed"),
+ PeakFormat=rep("bed",4))
+file.exists(samples$Peaks)
+file.exists(samples$bamReads)
+file.exists(samples$bamControl)
+
+dbObj <- dba(sampleSheet=samples)
+dbObj.counts <- dba.count(dbObj, bParallel=FALSE)
+pdf("pca_H3K27Ac.pdf")
+plot(dbObj.counts,margin=15)
+dba.plotPCA(dbObj.counts)
+dev.off()
+```
+## Peak Annotation - Figure S5H-I
+```{r}
+library("ChIPseeker")
+library("org.Dr.eg.db")
+library(clusterProfiler)
+library("TxDb.Drerio.UCSC.danRer11.refGene")
+OrgDb="org.Dr.eg.db"
+library(GenomicFeatures)
+txdb=TxDb.Drerio.UCSC.danRer11.refGene
+setwd("$WORKDIR/chip/h3k27ac/pcChIP/outputs/annotation")
+
+#p3f.diffBind
+peak <- readPeakFile("$WORKDIR/chip/h3k27ac/pcChIP/outputs/peaks/p3f.enriched_H3K27Ac.bed")
+peakAnno <- annotatePeak(peak, tssRegion=c(-3000, 3000),
+                         TxDb=txdb, annoDb="org.Dr.eg.db")
+plotAnnoPie(peakAnno)
+pdf("p3f.enriched_H3K27ac.pdf")
+plotAnnoPie(peakAnno)
+plotDistToTSS(peakAnno,
+              title="Distribution of K27Ac nrelative to TSS")
+bp <- enrichGO(as.data.frame(peakAnno)$geneId, OrgDb, ont="BP", readable=TRUE)
+dotplot(bp)
+bp <- enrichGO(as.data.frame(peakAnno)$geneId, OrgDb, ont="MF", readable=TRUE)
+dotplot(bp)
+bp <- enrichGO(as.data.frame(peakAnno)$geneId, OrgDb, ont="CC", readable=TRUE)
+dotplot(bp)
+dev.off()
+write.csv(peakAnno, file = "p3f.enriched_H3K27ac_anno.csv")
+
+#cntl.diffBind
+peak <- readPeakFile("$WORKDIR/chip/h3k27ac/pcChIP/outputs/peaks/cntl.enriched_H3K27Ac.bed")
+peakAnno <- annotatePeak(peak, tssRegion=c(-3000, 3000),
+                         TxDb=txdb, annoDb="org.Dr.eg.db")
+plotAnnoPie(peakAnno)
+pdf("cntl.enriched_H3K27ac_anno.pdf")
+plotAnnoPie(peakAnno)
+plotDistToTSS(peakAnno,
+              title="Distribution of K27Ac nrelative to TSS")
+bp <- enrichGO(as.data.frame(peakAnno)$geneId, OrgDb, ont="BP", readable=TRUE)
+dotplot(bp)
+bp <- enrichGO(as.data.frame(peakAnno)$geneId, OrgDb, ont="MF", readable=TRUE)
+dotplot(bp)
+bp <- enrichGO(as.data.frame(peakAnno)$geneId, OrgDb, ont="CC", readable=TRUE)
+dotplot(bp)
+dev.off()
+write.csv(peakAnno, file = "cntl.enriched_H3K27ac_anno.csv")
+
+#p3f.concensus
+peak <- readPeakFile("$WORKDIR/chip/h3k27ac/pcChIP/outputs/peaks/P3F_consensus.bed")
+peakAnno <- annotatePeak(peak, tssRegion=c(-3000, 3000),
+                         TxDb=txdb, annoDb="org.Dr.eg.db")
+plotAnnoPie(peakAnno)
+pdf("p3f.concensus_H3K27ac_anno.pdf")
+plotAnnoPie(peakAnno)
+plotDistToTSS(peakAnno,
+              title="Distribution of K27Ac nrelative to TSS")
+bp <- enrichGO(as.data.frame(peakAnno)$geneId, OrgDb, ont="BP", readable=TRUE)
+dotplot(bp)
+bp <- enrichGO(as.data.frame(peakAnno)$geneId, OrgDb, ont="MF", readable=TRUE)
+dotplot(bp)
+bp <- enrichGO(as.data.frame(peakAnno)$geneId, OrgDb, ont="CC", readable=TRUE)
+dotplot(bp)
+dev.off()
+write.csv(peakAnno, file = "p3f.concensus_H3K27ac_anno.csv")
+
+#cntl.concensus
+peak <- readPeakFile("$WORKDIR/chip/h3k27ac/pcChIP/outputs/peaks/Ctrl_consensus.bed")
+peakAnno <- annotatePeak(peak, tssRegion=c(-3000, 3000),
+                         TxDb=txdb, annoDb="org.Dr.eg.db")
+plotAnnoPie(peakAnno)
+pdf("cntl.concensus_H3K27ac_anno.pdf")
+plotAnnoPie(peakAnno)
+plotDistToTSS(peakAnno,
+              title="Distribution of K27Ac nrelative to TSS")
+bp <- enrichGO(as.data.frame(peakAnno)$geneId, OrgDb, ont="BP", readable=TRUE)
+dotplot(bp)
+bp <- enrichGO(as.data.frame(peakAnno)$geneId, OrgDb, ont="MF", readable=TRUE)
+dotplot(bp)
+bp <- enrichGO(as.data.frame(peakAnno)$geneId, OrgDb, ont="CC", readable=TRUE)
+dotplot(bp)
+dev.off()
+write.csv(peakAnno, file = "cntl.concensus_H3K27ac_anno.csv")
+```
+## Ploting h3k27ac Distribution - Figure 4I
+```{r}
+setwd("$WORKDIR/chip/h3k27ac/pcChIP/outputs/annotation/")
+
+df <- read.csv("$WORKDIR/chip/h3k27ac/pcChIP/outputs/annotation/p3f.concensus_H3K27ac_anno.csv")
+nrow(df[str_detect(df$annotation, "Distal Intergenic"), ])
+nrow(df[str_detect(df$annotation, "Promoter"), ])
+nrow(df[str_detect(df$annotation, "UTR"), ])
+nrow(df[str_detect(df$annotation, "Intron"), ])
+nrow(df[str_detect(df$annotation, "Exon"), ])
+nrow(df[str_detect(df$annotation, "Downstream"), ])
+
+df <- read.csv("$WORKDIR/chip/h3k27ac/pcChIP/outputs/annotation/cntl.concensus_H3K27ac_anno.csv")
+nrow(df[str_detect(df$annotation, "Distal Intergenic"), ])
+nrow(df[str_detect(df$annotation, "Promoter"), ])
+nrow(df[str_detect(df$annotation, "UTR"), ])
+nrow(df[str_detect(df$annotation, "Intron"), ])
+nrow(df[str_detect(df$annotation, "Exon"), ])
+nrow(df[str_detect(df$annotation, "Downstream"), ])
+
+df <- read.csv("$WORKDIR/chip/h3k27ac/pcChIP/outputs/annotation/cntl.enriched_H3K27ac_anno.csv")
+nrow(df[str_detect(df$annotation, "Distal Intergenic"), ])
+nrow(df[str_detect(df$annotation, "Promoter"), ])
+nrow(df[str_detect(df$annotation, "UTR"), ])
+nrow(df[str_detect(df$annotation, "Intron"), ])
+nrow(df[str_detect(df$annotation, "Exon"), ])
+nrow(df[str_detect(df$annotation, "Downstream"), ])
+
+df <- read.csv("$WORKDIR/chip/h3k27ac/pcChIP/outputs/annotation/p3f.enriched_H3K27ac_anno.csv")
+nrow(df[str_detect(df$annotation, "Distal Intergenic"), ])
+nrow(df[str_detect(df$annotation, "Promoter"), ])
+nrow(df[str_detect(df$annotation, "UTR"), ])
+nrow(df[str_detect(df$annotation, "Intron"), ])
+nrow(df[str_detect(df$annotation, "Exon"), ])
+nrow(df[str_detect(df$annotation, "Downstream"), ])
+# summary of findings in distribution.csv
+```
+
+```{r}
+library(tidyverse)
+setwd("$WORKDIR/chip/h3k27ac/pcChIP/outputs/annotation/distribution.csv")
+df <- read.csv("distribution.csv")
+pdf("distribution.H3K27Ac.pdf")
+ggplot(data=df, aes(x=Sample, y=Percent, fill=Location)) +
+  geom_bar(stat="identity") +
+   theme_minimal()
+dev.off()
+```
+## Overlap of Peaks - Figure 4D
+```{r}
+library(DiffBind)
+library(tidyverse)
+setwd("$WORKDIR/chip/h3k27ac/pcChIP/outputs/annotation/")
+
+samples <- data.frame(
+ SampleID=c("cntl", "p3f"),
+ Condition=rep(c("cntl", "p3f")),
+ Tissue=rep("zebrafish",2),
+ Factor=rep(c("cntl", "p3f")),
+ bamReads=c(
+  "$WORKDIR/chip/h3k27ac/pcChIP/pipeline_outputs/bams/Ctrl_1_ds.bam",
+  "$WORKDIR/chip/h3k27ac/pcChIP/pipeline_outputs/bams/P3F_1_ds.bam"),
+ Peaks=c(
+  "$WORKDIR/chip/h3k27ac/pcChIP/pipeline_outputs/peaks/Ctrl_consensus.bed",
+  "$WORKDIR/chip/h3k27ac/pcChIP/pipeline_outputs/peaks/P3F_consensus.bed"),
+ PeakFormat=rep("bed",2))
+file.exists(samples$Peaks)
+file.exists(samples$bamReads)
+
+dbObj <- dba(sampleSheet=samples)
+dba.overlap(dbObj,dbObj$masks$raw,mode=DBA_OLAP_RATE)
+pdf("h3k27ac_overlap.pdf")
+olap.rate <- dba.overlap(dbObj,dbObj$masks$raw,mode=DBA_OLAP_RATE)
+dba.plotVenn(dbObj, dbObj$masks$raw)
+dev.off()
+```
+## H3K27ac signal at all sites - Figure S5G
+```{bash}
+cd #WORKDIR
+set -e
+module purge
+
+module load GCC/10.3.0 \
+            BEDTools/2.30.0
+
+cat \
+      chip/h3k27ac/pcChIP/pipeline_outputs/peaks/Ctrl_1_ds_subcommands.narrowPeak \
+      chip/h3k27ac/pcChIP/pipeline_outputs/peaks/Ctrl_2_ds_subcommands.narrowPeak \
+      chip/h3k27ac/pcChIP/pipeline_outputs/peaks/P3F_1_ds_subcommands.narrowPeak \
+      chip/h3k27ac/pcChIP/pipeline_outputs/peaks/P3F_2_ds_subcommands.narrowPeak \
+            > chip/h3k27ac/pcChIP/outputs/heatmaps/temp.narrowPeak
+
+bedtools sort -i chip/h3k27ac/pcChIP/outputs/heatmaps/temp.narrowPeak > chip/h3k27ac/pcChIP/outputs/heatmaps/temp_sorted.narrowPeak
+
+bedtools merge \
+ -i chip/h3k27ac/pcChIP/outputs/heatmaps/temp_sorted.narrowPeak \
+      > chip/h3k27ac/pcChIP/outputs/heatmaps/h3k27ac.allPeaks.narrowPeak
+
+rm chip/h3k27ac/pcChIP/outputs/heatmaps/*temp*
+
+module load GCC/9.3.0 \
+            OpenMPI/4.0.3 \
+            deepTools/3.3.1-Python-3.8.2
+
+computeMatrix reference-point \
+  -S    chip/h3k27ac/pcChIP/outputs/bigwigs/Ctrl_avg_signal.bigWig \
+        chip/h3k27ac/pcChIP/outputs/bigwigs/P3F_avg_signal.bigWig \
+  -R  chip/h3k27ac/pcChIP/outputs/heatmaps/h3k27ac.allPeaks.narrowPeak \
+  --referencePoint center \
+  -b 3000 \
+  -a 3000 \
+  -bs=1 \
+  -p=max \
+  --missingDataAsZero \
+  -o chip/h3k27ac/pcChIP/outputs/heatmaps/k27ac_consensus.matrix.gz
+plotHeatmap \
+      -m chip/h3k27ac/pcChIP/outputs/heatmaps/k27ac_consensus.matrix.gz \
+      -o chip/h3k27ac/pcChIP/outputs/heatmaps/k27ac_consensus.pdf \
+      --regionsLabel peaks \
+      --perGroup \
+      --samplesLabel CNTL P3F \
+      --colorMap=BuGn
+```
+## Profile plot of differential H3K27ac peaks - Figure 4E
+```{bash}
+module purge
+module load GCC/9.3.0 \
+            OpenMPI/4.0.3 \
+            deepTools/3.3.1-Python-3.8.2
+
+computeMatrix reference-point \
+  -S    chip/h3k27ac/pcChIP/outputs/bigwigs/Ctrl_avg_signal.bigWig \
+       chip/h3k27ac/pcChIP/outputs/bigwigs/P3F_avg_signal.bigWig \
+  -R  chip/h3k27ac/pcChIP/outputs/peaks/p3f.enriched_H3K27Ac.bed \
+      chip/h3k27ac/pcChIP/outputs/peaks/cntl.enriched_H3K27Ac.bed \
+  --referencePoint center \
+  -b 3000 \
+  -a 3000 \
+  -bs=1 \
+  -p=max \
+  --missingDataAsZero \
+  -o chip/h3k27ac/pcChIP/outputs/heatmaps/k27ac_differential.matrix.gz
+plotProfile \
+      -m chip/h3k27ac/pcChIP/outputs/heatmaps/k27ac_differential.matrix.gz \
+      -o chip/h3k27ac/pcChIP/outputs/heatmaps/k27ac_differential.pdf \
+      --regionsLabel p3f.enriched cntl.enriched \
+      --perGroup \
+      --samplesLabel CNTL P3F \
+      --colors red blue
+```
+## Motif analysis at differential H3K27ac sites - Figure 4F, S5D
+```{bash}
+module purge
+module load homer/4.11.1
+
+fileArray=(chip/h3k27ac/pcChIP/outputs/peaks/p3f.enriched_H3K27Ac.bed
+           chip/h3k27ac/pcChIP/outputs/peaks/cntl.enriched_H3K27Ac.bed)
+
+R1=${fileArray[$SLURM_ARRAY_TASK_ID]}
+baseName=${R1##*/}
+baseName=${baseName%%.bed*}
+
+findMotifsGenome.pl \
+  ${R1} \
+  danRer11.fa \
+  chip/h3k27ac/pcChIP/outputs/homer/${baseName} \
+  -size given \
+  -p 10
+```
+
+
+
+
+
+# pcPAX3::FOXO1-minusHD
+ChIP-seq on PAX3::FOXO1 domain deletion mutant without the homeobox DNA binding domain
+Full-length PAX3::FOXO1 and CNTL ChIP-seq samples were re-analyzed
+## make directories
+```{bash}
+mkdir chip/p3f/homeobox_pcChIP
+mkdir chip/p3f/homeobox_pcChIP/outputs
+mkdir chip/p3f/homeobox_pcChIP/pipeline_dsALL
+mkdir chip/p3f/homeobox_pcChIP/outputs/peaks
+mkdir chip/p3f/homeobox_pcChIP/outputs/peaks/motifs
+mkdir chip/p3f/homeobox_pcChIP/outputs/bigwigs
+mkdir chip/p3f/homeobox_pcChIP/outputs/annotation
+mkdir chip/p3f/homeobox_pcChIP/outputs/homer
+mkdir chip/p3f/homeobox_pcChIP/outputs/motifs
+mkdir chip/p3f/homeobox_pcChIP/outputs/heatmaps
+```
+## Run PerCell pipeline
+```{bash}
+cd chip/p3f/homeobox_pcChIP/pipeline_dsALL
+
+ml purge
+ml load nextflow/default
+
+nextflow run lextallan/PerCell/PC.nf -r main \
+    -profile singularity \
+    -qs 20 \
+    --input P3FHD-allsamples_input.csv \
+    --outdir chip/p3f/homeobox_pcChIP/outputs/pipeline_dsALL \
+    --aligner bowtie2 \
+    --experimental zebrafish \
+    --spikein human \
+    --human_fa hg38.fa \
+    --zebrafish_fa danRer11.fa \
+    --skip_trimming true \
+    --skip_downsample false \
+    --skip_fastqc true \
+    --seed 9 \
+    --skip_annotation true \
+    --macs2_cutoff 0.63096 \
+    --skip_idr true \
+    --idr_cutoff 0.05 \
+    --skip_motif true \
+    --macs2_peak_method 'ppois' \
+    --skip_consensus false \
+    --override_spikeinfail false \
+    --macs2_bigwig_method 'FE' \
+```
+## Call concensus/overlapping peaks
+```{bash}
+cd /home/gdkendalllab/lab/analyses/rsjxk002/P3F_at6hpf_jack/chip/p3f/homeobox_pcChIP/outputs/peaks
+ml purge
+ml load GCC/10.3.0 \
+        BEDTools/2.30.0
+
+bedtools intersect \
+    -u \
+    -wa \
+    -a $WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_dsALL/bowtie2/macs2_subcommands/0.63096_cutoff/PAX3FOXO1_1_ds_subcommands.narrowPeak \
+    -b $WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_dsALL/bowtie2/macs2_subcommands/0.63096_cutoff/PAX3FOXO1_2_ds_subcommands.narrowPeak \
+            > P3F_dsALL.consensusPeaks.narrowPeak
+
+bedtools intersect \
+    -u \
+    -wa \
+    -a $WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_dsALL/bowtie2/macs2_subcommands/0.63096_cutoff/CNTL_1_ds_subcommands.narrowPeak \
+    -b $WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_dsALL/bowtie2/macs2_subcommands/0.63096_cutoff/CNTL_1_ds_subcommands.narrowPeak \
+            > CNTL_dsALL.consensusPeaks.narrowPeak
+
+bedtools intersect \
+    -u \
+    -wa \
+    -a $WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_dsALL/bowtie2/macs2_subcommands/0.63096_cutoff/P3FHD_1_ds_subcommands.narrowPeak \
+    -b $WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_dsALL/bowtie2/macs2_subcommands/0.63096_cutoff/P3FHD_2_ds_subcommands.narrowPeak \
+            > P3FHD_dsALL.consensusPeaks.narrowPeak
+```
+#### diffBind on P3F-minusHD peaks
+```{r}
+library(DiffBind)
+library(tidyverse)
+setwd("$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/peaks")
+
+#P3F-minusHD
+samples <- data.frame(
+ SampleID=c("p3f_rep1","p3f_rep2","cntl_rep1","cntl_rep2"),
+ Condition=rep(c("p3f","cntl"),each=2),
+ Tissue=rep("zebrafish",4),
+ Factor=rep(c("p3f","cntl"),each=2),
+ Replicate=c(1:2,1:2),
+ bamReads=c(
+ "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_dsALL/bowtie2/deduplicated/zebrafish/P3FHD_1.dd.bam",
+ "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_dsALL/bowtie2/deduplicated/zebrafish/P3FHD_2.dd.bam",
+ "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_dsALL/bowtie2/deduplicated/zebrafish/CNTL_1.dd.bam",
+ "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_dsALL/bowtie2/deduplicated/zebrafish/CNTL_2.dd.bam"),
+ControlID=c("p3f_rep1","p3f_rep2","cntl_rep1","cntl_rep2"),
+bamControl=c(
+ "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_dsALL/bowtie2/deduplicated/zebrafish/P3FHD-Input_1.dd.bam",
+ "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_dsALL/bowtie2/deduplicated/zebrafish/P3FHD-Input_2.dd.bam",
+ "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_dsALL/bowtie2/deduplicated/zebrafish/CNTL-Input_1.dd.bam",
+ "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_dsALL/bowtie2/deduplicated/zebrafish/CNTL-Input_2.dd.bam"),
+ Peaks=c(
+  "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_optimization/dsALL-0.63096/P3FHD_consensusPeaks.narrowPeak",
+  "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_optimization/dsALL-0.63096/P3FHD_consensusPeaks.narrowPeak",
+  "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_optimization/dsALL-0.63096/P3FHD_consensusPeaks.narrowPeak",
+  "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_optimization/dsALL-0.63096/P3FHD_consensusPeaks.narrowPeak"),
+ PeakFormat=rep("bed",4))
+file.exists(samples$Peaks)
+file.exists(samples$bamReads)
+
+dbObj <- dba(sampleSheet=samples)
+dbObj <- dba.count(dbObj, bUseSummarizeOverlaps=TRUE)
+dbObj <- dba.contrast(dbObj, categories=DBA_FACTOR, minMembers = 2)
+dbObj <- dba.analyze(dbObj, method=DBA_ALL_METHODS)
+
+res_deseq <- dba.report(dbObj, method=DBA_DESEQ2, contrast = 1, th=1)
+out <- as.data.frame(res_deseq)
+pcP3F_deseq <- out %>% 
+  filter(p.value < 0.05 & Fold < 0) %>% 
+  select(seqnames, start, end)
+write.table(pcP3F_deseq, file="P3FHD_dsALL.diffBind.bed", sep="\t", quote=F, row.names=F, col.names=F)
+
+# P3F full-length
+samples <- data.frame(
+ SampleID=c("p3f_rep1","p3f_rep2","cntl_rep1","cntl_rep2"),
+ Condition=rep(c("p3f","cntl"),each=2),
+ Tissue=rep("zebrafish",4),
+ Factor=rep(c("p3f","cntl"),each=2),
+ Replicate=c(1:2,1:2),
+ bamReads=c(
+ "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_dsALL/bowtie2/deduplicated/zebrafish/PAX3FOXO1_1.dd.bam",
+ "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_dsALL/bowtie2/deduplicated/zebrafish/PAX3FOXO1_2.dd.bam",
+ "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_dsALL/bowtie2/deduplicated/zebrafish/CNTL_1.dd.bam",
+ "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_dsALL/bowtie2/deduplicated/zebrafish/CNTL_2.dd.bam"),
+ControlID=c("p3f_rep1","p3f_rep2","cntl_rep1","cntl_rep2"),
+bamControl=c(
+ "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_dsALL/bowtie2/deduplicated/zebrafish/PAX3FOXO1-Input_1.dd.bam",
+ "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_dsALL/bowtie2/deduplicated/zebrafish/PAX3FOXO1-Input_2.dd.bam",
+ "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_dsALL/bowtie2/deduplicated/zebrafish/CNTL-Input_1.dd.bam",
+ "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_dsALL/bowtie2/deduplicated/zebrafish/CNTL-Input_2.dd.bam"),
+ Peaks=c(
+  "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_optimization/dsALL-0.63096/P3F_consensusPeaks.narrowPeak",
+  "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_optimization/dsALL-0.63096/P3F_consensusPeaks.narrowPeak",
+  "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_optimization/dsALL-0.63096/P3F_consensusPeaks.narrowPeak",
+  "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_optimization/dsALL-0.63096/P3F_consensusPeaks.narrowPeak"),
+ PeakFormat=rep("bed",4))
+file.exists(samples$Peaks)
+file.exists(samples$bamReads)
+
+dbObj <- dba(sampleSheet=samples)
+dbObj <- dba.count(dbObj, bUseSummarizeOverlaps=TRUE)
+dbObj <- dba.contrast(dbObj, categories=DBA_FACTOR, minMembers = 2)
+dbObj <- dba.analyze(dbObj, method=DBA_ALL_METHODS)
+
+res_deseq <- dba.report(dbObj, method=DBA_DESEQ2, contrast = 1, th=1)
+out <- as.data.frame(res_deseq)
+pcP3F_deseq <- out %>% 
+  filter(p.value < 0.05 & Fold < 0) %>% 
+  select(seqnames, start, end)
+write.table(pcP3F_deseq, file="PAX3FOXO1_dsALL.diffBind.bed", sep="\t", quote=F, row.names=F, col.names=F)
+```
+#### Generate merged bigwigs
+```{bash}
+cd $WORKDIR
+
+ml purge
+ml load GCCcore/11.2.0 \
+        Python/3.9.6
+
+pip install deeptools
+
+rep1Array=( $WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_dsALL/bowtie2/macs2_bigwigs/FE/CNTL_1_signal.bigWig
+            $WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_dsALL/bowtie2/macs2_bigwigs/FE/P3FHD_1_signal.bigWig
+            $WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_dsALL/bowtie2/macs2_bigwigs/FE/PAX3FOXO1_1_signal.bigWig)
+R1=${rep1Array[$SLURM_ARRAY_TASK_ID]}
+
+rep2Array=( $WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_dsALL/bowtie2/macs2_bigwigs/FE/CNTL_2_signal.bigWig
+            $WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_dsALL/bowtie2/macs2_bigwigs/FE/P3FHD_2_signal.bigWig
+            $WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_dsALL/bowtie2/macs2_bigwigs/FE/PAX3FOXO1_2_signal.bigWig)
+R2=${rep2Array[$SLURM_ARRAY_TASK_ID]}
+
+NameArray=(  cntl
+              p3f-hd
+              p3f)
+nameArray=${NameArray[$SLURM_ARRAY_TASK_ID]}
+
+bigwigAverage \
+  -b  ${R1} \
+      ${R2} \
+  --binSize 1 \
+  -p 20 \
+  -o chip/p3f/homeobox_pcChIP/outputs/bigwigs/${nameArray}.dsALL_average.bigwig
+```
+## PCA - Figure S7C
+```{r}
+library(DiffBind)
+library(tidyverse)
+setwd("$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/annotation")
+
+samples <- data.frame(
+ SampleID=c("p3f_rep1","p3f_rep2","cntl_rep1","cntl_rep2", "HDmut_rep1", "HDmut_rep2"),
+ Condition=rep(c("p3f","cntl", "HDmut"),each=2),
+ Tissue=rep("zebrafish",6),
+ Factor=rep(c("p3f","cntl","HDmut"),each=2),
+ Replicate=c(1:2,1:2,1:2),
+ bamReads=c(
+ "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_dsALL/bowtie2/downsample/PAX3FOXO1_1_ds.bam",
+ "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_dsALL/bowtie2/downsample/PAX3FOXO1_2_ds.bam",
+ "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_dsALL/bowtie2/downsample/CNTL_1_ds.bam",
+ "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_dsALL/bowtie2/downsample/CNTL_2_ds.bam",
+ "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_dsALL/bowtie2/downsample/P3FHD_1_ds.bam",
+ "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_dsALL/bowtie2/downsample/P3FHD_2_ds.bam"),
+ ControlID=c("p3f_rep1","p3f_rep2","cntl_rep1","cntl_rep2", "HDmut_rep1", "HDmut_rep2"),
+ bamControl=c(
+ "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_dsALL/bowtie2/downsample/PAX3FOXO1-Input_1_ds.bam",
+ "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_dsALL/bowtie2/downsample/PAX3FOXO1-Input_2_ds.bam",
+ "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_dsALL/bowtie2/downsample/CNTL-Input_1_ds.bam",
+ "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_dsALL/bowtie2/downsample/CNTL-Input_2_ds.bam",
+ "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_dsALL/bowtie2/downsample/P3FHD-Input_1_ds.bam",
+ "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/pipeline_dsALL/bowtie2/downsample/P3FHD-Input_2_ds.bam"),
+ Peaks=c(
+  "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/peaks/PAX3FOXO1_dsALL.diffBind.bed",
+  "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/peaks/PAX3FOXO1_dsALL.diffBind.bed",
+  "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/peaks/CNTL_dsALL.consensusPeaks.narrowPeak",
+  "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/peaks/CNTL_dsALL.consensusPeaks.narrowPeak",
+  "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/peaks/P3FHD_dsALL.diffBind.bed",
+  "$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/peaks/P3FHD_dsALL.diffBind.bed"),
+ PeakFormat=rep("bed",6))
+file.exists(samples$Peaks)
+file.exists(samples$bamReads)
+file.exists(samples$bamControl)
+
+dbObj <- dba(sampleSheet=samples)
+dbObj.counts <- dba.count(dbObj, bParallel=FALSE)
+pdf("pca_P3FHD_pcChIP.pdf")
+plot(dbObj.counts,margin=15)
+dba.plotPCA(dbObj.counts)
+dev.off()
+```
+## Motif analysis - Figure 6C, S7D
+```{bash}
+cd $WORDIR
+set -e 
+module purge
+module load homer/4.11.1
+
+findMotifsGenome.pl \
+ set -e 
+module purge
+module load homer/4.11.1
+
+findMotifsGenome.pl \
+  $WORDIR/chip/p3f/homeobox_pcChIP/outputs/peaks/P3FHD_dsALL.diffBind.bed \
+  danRer11.fa \
+  chip/p3f/homeobox_pcChIP/outputs/homer/P3FHD_dsALL.diffBind \
+  -size 75 \
+  -p 30
+
+findMotifsGenome.pl \
+  $WORDIR/chip/p3f/homeobox_pcChIP/outputs/peaks/PAX3FOXO1_dsALL.diffBind.bed \
+  danRer11.fa \
+  chip/p3f/homeobox_pcChIP/outputs/homer/PAX3FOXO1_dsALL.diffBind \
+  -size 75 \
+```
+## Find paired motifs
+```{bash}
+module purge
+module load homer/4.11.1
+
+scanMotifGenomeWide.pl \
+    $WORKDIR/chip/p3f/homeobox_pcChIP/outputs/homer/P3FHD_dsALL.diffBind/homerResults/motif1.motif \
+    danRer11.fa \
+    -bed \
+    > chip/p3f/homeobox_pcChIP/outputs/peaks/motifs/pairedMotif.bed
+```
+## Find bound paired motifs - Figure S7F
+```{bash}
+cd $WORKDIR/chip/p3f/homeobox_pcChIP/outputs/peaks/motifs
+ml purge
+ml load GCC/10.3.0 \
+        BEDTools/2.30.0
+
+bedtools subtract \
+    -A \
+    -a $WORKDIR/chip/p3f/homeobox_pcChIP/outputs/peaks/motifs/pairedMotif.bed \
+    -b $WORKDIR/chip/p3f/2mil_pcChIP/outputs/motifs/pax3foxo1Motif.bed \
+        > pairedMotif_nonOv.bed
+
+bedtools subtract \
+    -A \
+    -a $WORKDIR/chip/p3f/2mil_pcChIP/outputs/motifs/pax7Motif.bed \
+    -b $WORKDIR/chip/p3f/2mil_pcChIP/outputs/motifs/pax3foxo1Motif.bed \
+        > homeoboxMotif_nonOv.bed
+
+bedtools subtract \
+    -A \
+    -a $WORKDIR/p3f/2mil_pcChIP/outputs/motifs/pax3foxo1Motif.bed \
+    -b /$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/peaks/motifs/pairedMotif.bed \
+        > pax3foxo1Motif_nonOv_paired.bed
+
+bedtools subtract \
+    -A \
+    -a $WORKDIR/chip/p3f/2mil_pcChIP/outputs/motifs/pax3foxo1Motif.bed \
+    -b $WORKDIR/chip/p3f/2mil_pcChIP/outputs/motifs/pax7Motif.bed \
+        > pax3foxo1Motif_nonOv_homeobox.bed
+
+bedtools intersect \
+    -u \
+    -wa \
+    -a pax3foxo1Motif_nonOv_paired.bed \
+    -b pax3foxo1Motif_nonOv_homeobox.bed \
+            > pax3foxo1Motif_nonOv.bed
+rm pax3foxo1Motif_nonOv_*
+
+bedtools intersect \
+    -u \
+    -wa \
+    -a $WORKDIR/chip/p3f/homeobox_pcChIP/outputs/peaks/P3FHD_dsALL.diffBind.bed \
+    -b pairedMotif_nonOv.bed \
+            > pairedMotif_P3FHD-bound.bed
+
+bedtools intersect \
+    -u \
+    -wa \
+    -a $WORKDIR/chip/p3f/homeobox_pcChIP/outputs/peaks/P3FHD_dsALL.diffBind.bed \
+    -b pax3foxo1Motif_nonOv.bed \
+            > pax3foxo1Motif_P3FHD-bound.bed
+
+bedtools intersect \
+    -u \
+    -wa \
+    -a $WORKDIR/chip/p3f/homeobox_pcChIP/outputs/peaks/P3FHD_dsALL.diffBind.bed \
+    -b homeoboxMotif_nonOv.bed \
+            > homeoboxMotif_P3FHD-bound.bed
+
+bedtools intersect \
+    -u \
+    -wa \
+    -a $WORKDIR/chip/p3f/homeobox_pcChIP/outputs/peaks/PAX3FOXO1_dsALL.diffBind.bed \
+    -b pairedMotif_nonOv.bed \
+            > pairedMotif_PAX3FOXO1-bound.bed
+
+bedtools intersect \
+    -u \
+    -wa \
+    -a $WORKDIR/chip/p3f/homeobox_pcChIP/outputs/peaks/PAX3FOXO1_dsALL.diffBind.bed \
+    -b pax3foxo1Motif_nonOv.bed \
+            > pax3foxo1Motif_PAX3FOXO1-bound.bed
+
+bedtools intersect \
+    -u \
+    -wa \
+    -a $WORKDIR/chip/p3f/homeobox_pcChIP/outputs/peaks/PAX3FOXO1_dsALL.diffBind.bed \
+    -b homeoboxMotif_nonOv.bed \
+            > homeoboxMotif_PAX3FOXO1-bound.bed
+```
+#### Shared P3F and P3F-HDmut binding sites
+```{bash}
+cd $WORKDIR/chip/p3f/homeobox_pcChIP/outputs/peaks
+ml purge
+ml load GCC/10.3.0 \
+        BEDTools/2.30.0
+
+bedtools intersect \
+    -u \
+    -wa \
+    -a PAX3FOXO1_dsALL.diffBind.bed \
+    -b P3FHD_dsALL.diffBind.bed \
+            > PAX3FOXO1-P3FHD_shared.bed
+```
+#### Heatmaps at binding sites - Figure 6E
+```{bash}
+cd $WORKDIR
+module purge
+module load GCC/9.3.0 \
+            OpenMPI/4.0.3 \
+            deepTools/3.3.1-Python-3.8.2
+
+computeMatrix reference-point \
+  -S  chip/p3f/homeobox_pcChIP/outputs/bigwigs/cntl.dsALL_average.bigwig \
+      chip/p3f/homeobox_pcChIP/outputs/bigwigs/p3f.dsALL_average.bigwig \
+      chip/p3f/homeobox_pcChIP/outputs/bigwigs/p3f-hd.dsALL_average.bigwig \
+  -R        chip/p3f/homeobox_pcChIP/outputs/peaks/PAX3FOXO1_dsALL.diffBind.bed \
+            chip/p3f/homeobox_pcChIP/outputs/peaks/P3FHD_dsALL.diffBind.bed \
+  --referencePoint center \
+  -b 3000 \
+  -a 3000 \
+  -bs=1 \
+  -p=max \
+  --missingDataAsZero \
+  -o chip/p3f/homeobox_pcChIP/outputs/heatmaps/P3FHD_bindingSites.matrix.gz
+plotHeatmap \
+      -m chip/p3f/homeobox_pcChIP/outputs/heatmaps/P3FHD_bindingSites.matrix.gz \
+      -o chip/p3f/homeobox_pcChIP/outputs/heatmaps/P3FHD_bindingSites.pdf \
+      --regionsLabel P3F_sites P3F-HDmut_sites\
+      --samplesLabel CNTL P3F P3F-HDmut \
+      --colorMap=Purples
+```
+#### Heatmaps at shared binding sites - Figure S8I
+```{bash}
+module purge
+module load GCC/9.3.0 \
+            OpenMPI/4.0.3 \
+            deepTools/3.3.1-Python-3.8.2
+
+computeMatrix reference-point \
+  -S  chip/p3f/homeobox_pcChIP/outputs/bigwigs/cntl.dsALL_average.bigwig \
+      chip/p3f/homeobox_pcChIP/outputs/bigwigs/p3f.dsALL_average.bigwig \
+      chip/p3f/homeobox_pcChIP/outputs/bigwigs/p3f-hd.dsALL_average.bigwig \
+  -R        chip/p3f/homeobox_pcChIP/outputs/peaks/PAX3FOXO1-P3FHD_shared.bed \
+  --referencePoint center \
+  -b 3000 \
+  -a 3000 \
+  -bs=1 \
+  -p=max \
+  --missingDataAsZero \
+  -o chip/p3f/homeobox_pcChIP/outputs/heatmaps/P3FHD_bindingSites_shared.matrix.gz
+plotHeatmap \
+      -m chip/p3f/homeobox_pcChIP/outputs/heatmaps/P3FHD_bindingSites_shared.matrix.gz \
+      -o chip/p3f/homeobox_pcChIP/outputs/heatmaps/P3FHD_bindingSites_shared.pdf \
+      --regionsLabel shared_sites \
+      --samplesLabel CNTL P3F P3F-HDmut \
+      --heatmapHeight 7 \
+      --colorMap=Purples
+```

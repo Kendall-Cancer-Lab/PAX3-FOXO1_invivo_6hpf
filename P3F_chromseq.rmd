@@ -1,0 +1,1966 @@
+---
+title: "Rhabdomyosarcoma fusion oncoprotein initially pioneers a neural signature in vivo - Integration of P3F ChIP-seq, ATAC-seq, H3K27ac ChIP-seq, and RNA-seq"
+author: "Jack Kucinski"
+data: "04-10-2025"
+---
+## make directories
+```{bash}
+WORKDIR="path/to/working/directory"
+mkdir chip/p3f/2mil_pcChIP/outputs/bigwigs
+mkdir chip/p3f/2mil_pcChIP/outputs/motifs
+mkdir atac/
+mkdir atac/outputs/
+mkdir atac/outputs/bigwigs
+mkdir chip/zebrafish_dev/peak_overlaps
+mkdir chip/p3f/2mil_pcChIP/outputs/zebrafish_dev/peaks
+mkdir chip/p3f/2mil_pcChIP/outputs/zebrafish_dev/heatmaps
+mkdir atac/outputs/timecourse_pca
+mkdir atac/inputs/encode_outputs
+mkdir atac/inputs/Liu2018/encode_outputs
+mkdir chip/p3f/2mil_pcChIP/outputs/atacOverlap
+mkdir chip/p3f/2mil_pcChIP/outputs/atacOverlap/numbers
+mkdir atac/outputs/motif_accessibility
+mkdir chip/h3k27ac/pcChIP/outputs/enhancer_targets
+mkdir chip/h3k27ac/pcChIP/outputs/p3fOverlap
+mkdir rnaseq/analysis/motif_expression
+mkdir chip/p3f/2mil_pcChIP/outputs/targets
+mkdir chip/p3f/2mil_pcChIP/outputs/targets/tfs
+mkdir chip/p3f/2mil_pcChIP/outputs/repressed
+mkdir chip/p3f/2mil_pcChIP/outputs/repressed/enhancerBin
+mkdir chip/p3f/2mil_pcChIP/outputs/repressed/heatmaps
+mkdir chip/p3f/2mil_pcChIP/outputs/atacOverlap
+mkdir chip/p3f/2mil_pcChIP/outputs/atacOverlap/motifsNoATAC
+mkdir chip/p3f/2mil_pcChIP/outputs/repressed/targets
+mkdir chip/p3f/2mil_pcChIP/outputs/activated
+mkdir chip/p3f/2mil_pcChIP/outputs/activated/stratified
+mkdir chip/yue_brainMuscle/rna
+mkdir chip/yue_brainMuscle/h3k27ac
+mkdir chip/yue_brainMuscle/h3k27ac/outputs/
+mkdir chip/yue_brainMuscle/h3k27ac/outputs/heatmaps
+mkdir chip/yue_brainMuscle/h3k27ac/encode_outputs/
+mkdir chip/yue_brainMuscle/h3k27ac/encode_outputs/brain
+mkdir chip/yue_brainMuscle/h3k27ac/encode_outputs/muscle
+mkdir chip/yue_brainMuscle/atac/encode_outputs/
+mkdir chip/yue_brainMuscle/atac/encode_outputs/muscle
+mkdir chip/yue_brainMuscle/atac/encode_outputs/brain
+mkdir chip/yue_brainMuscle/atac/outputs/heatmaps
+mkdir rnaseq/patient_rnaseq
+mkdir rnaseq/patient_rnaseq/toSkeletal
+mkdir rnaseq/patient_rnaseq/toSkeletal
+mkdir rnaseq/patient_rnaseq/pediatric_cancer_xenografts
+mkdir chip/p3f/homeobox_pcChIP/outputs/peaks/accessibility
+```
+## Identify PAX3::FOXO1 binding sites overlaping relationships with ATAC-seq
+```{bash}
+cd $WORKDIR/chip/p3f/2mil_pcChIP/outputs/peaks
+ml purge
+ml load GCC/10.3.0 \
+        BEDTools/2.30.0
+
+bedtools subtract \
+    -A \
+    -a /home/gdkendalllab/lab/analyses/rsjxk002/P3F_at6hpf_jack/chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind.bed \
+    -b /gpfs0/home1/gdkendalllab/lab/analyses/cenny/pax3foxo1_analysis/encode_atac_p3f/peak/overlap_reproducibility/overlap.optimal_peak.narrowPeak \
+        > pcP3F_diffBind_noATAC.bed
+
+wc -l pcP3F_diffBind.bed > P3FAll_PeakNumber.txt
+wc -l pcP3F_diffBind_noATAC.bed > P3FNoATAC_PeakNumber.txt
+
+bedtools intersect \
+    -wa \
+    -u \
+    -a /home/gdkendalllab/lab/analyses/shared/P3F_at6hpf/p3f/peaks/pcP3F_diffBind.bed \
+    -b /gpfs0/home1/gdkendalllab/lab/analyses/cenny/pax3foxo1_analysis/encode_atac_p3f/peak/overlap_reproducibility/overlap.optimal_peak.narrowPeak \
+        > pcP3F_diffBind_ATAC.bed
+
+wc -l pcP3F_diffBind_ATAC.bed > P3F-ATAC_PeakNumber.txt
+```
+## PAX3::FOXO1 binding between accessible and inaccessible sites - Figure S4E
+```{bash}
+cd $WORKDIR
+module purge
+module load GCC/9.3.0 \
+            OpenMPI/4.0.3 \
+            deepTools/3.3.1-Python-3.8.2
+
+computeMatrix reference-point \
+  -S  chip/p3f/2mil_pcChIP/outputs/bigwigs/CNTL_avg_signal.bigWig \ # average bigwigs between replicates generated with deeptools
+      chip/p3f/2mil_pcChIP/outputs/bigwigs/P3F_avg_signal.bigWig \
+  -R    chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind_ATAC.bed \
+        chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind_noATAC.bed \
+  --referencePoint center \
+  -b 3000 \
+  -a 3000 \
+  -bs=1 \
+  -p=max \
+  --missingDataAsZero \
+  -o chip/p3f/2mil_pcChIP/outputs/heatmaps/p3f_toATAC_signal.matrix.gz
+plotHeatmap \
+      -m chip/p3f/2mil_pcChIP/outputs/heatmaps/p3f_toATAC_signal.matrix.gz \
+      -o chip/p3f/2mil_pcChIP/outputs/heatmaps/p3f_toATAC_signal.pdf \
+      --regionsLabel accessible inaccessible \
+      --samplesLabel cntl p3f \
+      --colorMap=Purples
+```
+## Generating ATAC bigwigs
+```{bash}
+ml purge
+ml load GCC/9.3.0 \
+        OpenMPI/4.0.3 \
+        deepTools/3.3.1-Python-3.8.2
+
+fileArray=($workdir/encode_atac_ctrl/align/rep1/JPK0045_S2_L001_R1_001.trim.srt.nodup.no_chrM_MT.bam
+           $workdir/encode_atac_ctrl/align/rep2/JPK0047_S4_L001_R1_001.trim.srt.nodup.no_chrM_MT.bam
+           $workdir/encode_atac_p3f/align/rep1/JPK0044_S1_L001_R1_001.trim.srt.nodup.no_chrM_MT.bam
+           $workdir/encode_atac_p3f/align/rep2/JPK0046_S3_L001_R1_001.trim.srt.nodup.no_chrM_MT.bam)
+R1=${fileArray[$SLURM_ARRAY_TASK_ID]}
+baseName=${R1##*/}
+baseName=${baseName%%_*}
+
+bamCoverage \
+ -b ${R1} \
+ -o atac/outputs/bigwigs/${baseName}.bigwig \
+ --binSize 1 \
+ -p 10 \
+ --effectiveGenomeSize 1679203469 \
+ --normalizeUsing BPM
+
+ml purge
+ml load GCCcore/11.2.0 \
+        Python/3.9.6
+
+pip install deeptools
+
+rep1Array=( atac/outputs/bigwigs/JPK0045.bigwig
+            atac/outputs/bigwigs/JPK0044.bigwig)
+R1=${rep1Array[$SLURM_ARRAY_TASK_ID]}
+rep2Array=( atac/outputs/bigwigs/JPK0047.bigwig
+            atac/outputs/bigwigs/JPK0046.bigwig)
+R2=${rep2Array[$SLURM_ARRAY_TASK_ID]}
+
+NameArray=(  cntl
+              p3f)
+nameArray=${NameArray[$SLURM_ARRAY_TASK_ID]}
+
+bigwigAverage \
+  -b  ${R1} \
+      ${R2} \
+  --binSize 1 \
+  -p 12 \
+  -o atac/outputs/bigwigs/${nameArray}.atac_average.bigwig
+```
+## Binding and effects at different PAX3::FOXO1 motifs - Figure 3G, Figure 4G-H
+```{bash}
+module purge
+module load GCC/9.3.0 \
+            OpenMPI/4.0.3 \
+            deepTools/3.3.1-Python-3.8.2
+
+computeMatrix reference-point \
+  -S  chip/p3f/2mil_pcChIP/outputs/bigwigs/CNTL_avg_signal.bigWig \
+      chip/p3f/2mil_pcChIP/outputs/bigwigs/P3F_avg_signal.bigWig \
+  -R    chip/p3f/2mil_pcChIP/outputs/motifs/beds/pax7Motif_bound_nonOv.bed \
+        chip/p3f/2mil_pcChIP/outputs/motifs/beds/pax3foxo1Motif_bound_nonOv.bed \
+  --referencePoint center \
+  -b 3000 \
+  -a 3000 \
+  -bs=1 \
+  -p=max \
+  --missingDataAsZero \
+  -o chip/p3f/2mil_pcChIP/outputs/motifs/p3f_motifs_signal.matrix.gz
+plotHeatmap \
+      -m chip/p3f/2mil_pcChIP/outputs/motifs/p3f_motifs_signal.matrix.gz \
+      -o chip/p3f/2mil_pcChIP/outputs/motifs/p3f_motifs_signal.pdf \
+      --regionsLabel pax7 pax3foxo1 \
+      --samplesLabel cntl p3f \
+      --colorMap=Purples
+
+computeMatrix reference-point \
+  -S  chip/h3k27ac/pcChIP/outputs/bigwigs/Ctrl_avg_signal.bigWig \
+      chip/h3k27ac/pcChIP/outputs/bigwigs/P3F_avg_signal.bigWig \
+  -R    chip/p3f/2mil_pcChIP/outputs/motifs/beds/pax7Motif_bound_nonOv.bed \
+        chip/p3f/2mil_pcChIP/outputs/motifs/beds/pax3foxo1Motif_bound_nonOv.bed \
+  --referencePoint center \
+  -b 3000 \
+  -a 3000 \
+  -bs=1 \
+  -p=max \
+  --missingDataAsZero \
+  -o chip/p3f/2mil_pcChIP/outputs/motifs/p3f_motifs_k27ac.matrix.gz
+plotHeatmap \
+      -m chip/p3f/2mil_pcChIP/outputs/motifs/p3f_motifs_k27ac.matrix.gz \
+      -o chip/p3f/2mil_pcChIP/outputs/motifs/p3f_motifs_k27ac.pdf \
+      --regionsLabel pax7 pax3foxo1 \
+      --samplesLabel cntl p3f \
+      --colorMap=BuGn
+
+computeMatrix reference-point \
+  -S  chip/p3f/2mil_pcChIP/outputs/bigwigs/CNTL_avg_signal.bigWig \ # average bigwigs between replicates generated with deeptools
+      chip/p3f/2mil_pcChIP/outputs/bigwigs/P3F_avg_signal.bigWig \
+  --referencePoint center \
+  -b 3000 \
+  -a 3000 \
+  -bs=1 \
+  -p=max \
+  --missingDataAsZero \
+  -o chip/p3f/2mil_pcChIP/outputs/p3f_motifs_atac.matrix.gz
+plotHeatmap \
+      -m chip/p3f/2mil_pcChIP/outputs/motifs/p3f_motifs_atac.matrix.gz \
+      -o chip/p3f/2mil_pcChIP/outputs/motifs/p3f_motifs_atac.pdf \
+      --regionsLabel pax7 pax3foxo1 \
+      --samplesLabel cntl p3f \
+      --colorMap=Blues
+```
+## Motif enrichment and heatmaps at inaccessible sites - Figure 3B, 3C, 3E
+```{bash}
+cd $WORKDIR
+computeMatrix reference-point \
+  -S  atac/outputs/bigwigs/cntl.atac_average.bigwig \
+      atac/outputs/bigwigs/p3f.atac_average.bigwig \
+  -R chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind.bed \
+  --referencePoint center \
+  -b 3000 \
+  -a 3000 \
+  -bs=1 \
+  -p=max \
+  --missingDataAsZero \
+  -o chip/p3f/2mil_pcChIP/outputs/atacOverlap/atacsignal_atP3Fsites.matrix.gz
+plotHeatmap \
+      -m chip/p3f/2mil_pcChIP/outputs/atacOverlap/atacsignal_atP3Fsites.matrix.gz \
+      -o chip/p3f/2mil_pcChIP/outputs/atacOverlap/atacsignal_atP3Fsites.pdf \
+      --regionsLabel 'signal' \
+      --samplesLabel CNTL P3F \
+      --kmeans 3 \
+      --colorMap=Blues
+
+# At sites without ATAC peaks
+computeMatrix reference-point \
+  -S  /atac/outputs/bigwigs/cntl.atac_average.bigwig \
+      /atac/outputs/bigwigs/p3f.atac_average.bigwig \
+  -R /P3F_at6hpf_jack/chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind_noATAC.bed \
+  --referencePoint center \
+  -b 3000 \
+  -a 3000 \
+  -bs=1 \
+  -p=max \
+  --missingDataAsZero \
+  -o chip/p3f/2mil_pcChIP/outputs/atacOverlap/ATACsignal_noaccess.matrix.gz
+plotHeatmap \
+  -m chip/p3f/2mil_pcChIP/outputs/atacOverlap/ATACsignal_noaccess.matrix.gz \
+  -o chip/p3f/2mil_pcChIP/outputs/atacOverlap/ATAC_noaccess.pdf \
+  --regionsLabel 'signal' \
+  --samplesLabel CNTL P3F \
+  --colorMap=Blues
+
+
+computeMatrix reference-point \
+  -S  chip/p3f/2mil_pcChIP/outputs/bigwigs/CNTL_avg_signal.bigWig \
+      chip/p3f/2mil_pcChIP/outputs/bigwigs/P3F_avg_signal.bigWig \
+  -R chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind_noATAC.bed \
+  --referencePoint center \
+  -b 3000 \
+  -a 3000 \
+  -bs=1 \
+  -p=max \
+  --missingDataAsZero \
+  -o chip/p3f/2mil_pcChIP/outputs/atacOverlap/P3Fsignal_noaccess.matrix.gz
+plotHeatmap \
+  -m chip/p3f/2mil_pcChIP/outputs/atacOverlap/P3Fsignal_noaccess.matrix.gz \
+  -o chip/p3f/2mil_pcChIP/outputs/atacOverlap/P3Fcsignal_noaccess.pdf \
+  --regionsLabel 'signal' \
+  --samplesLabel CNTL P3F \
+  --colorMap=Purples
+
+#motif analysis at inaccessible sites
+module purge
+module load homer/4.11.1
+
+findMotifsGenome.pl \
+  chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind_noATAC.bed \
+  danRer11.fa \
+  chip/p3f/2mil_pcChIP/outputs/atacOverlap/motifsNoATAC/size75 \
+  -size 75 \
+  -p 30
+```
+## Ploting motif enrichment across conditions - Figure S5E
+```{r}
+library(tidyverse)
+setwd("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/motifs")
+
+motif <- read.delim("$WORKDIR/chip/h3k27ac/pcChIP/outputs/homer/p3f.enriched_H3K27Ac/knownResults.txt")
+motif <- top_n(motif,30)
+motif$X <- rownames(motif)
+motif$Y <- -1*motif$Log.P.value
+pdf("k27ac.activated_motifs.pdf")
+ggplot(motif, aes(x=as.numeric(X), y=Y)) + 
+    geom_point(size=3, colour = "green") +
+    theme_classic() +
+    xlab("rank") +
+    ylab ("-log10 pval")
+dev.off()
+
+motif <- read.delim("$workdir/homer_atac_up/knownResults.txt")
+motif <- top_n(motif,30)
+motif$X <- rownames(motif)
+motif$Y <- -1*motif$Log.P.value
+pdf("atac.activated_motifs.pdf")
+ggplot(motif, aes(x=as.numeric(X), y=Y)) + 
+    geom_point(size=3, colour = "blue") +
+    theme_classic() +
+    xlab("rank") +
+    ylab ("-log10 pval")
+dev.off()
+
+motif <- read.delim("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/homer/p3f_size75bp/knownResults.txt")
+motif <- top_n(motif,30)
+motif$X <- rownames(motif)
+motif$Y <- -1*motif$Log.P.value
+pdf("p3f_motifs.pdf")
+ggplot(motif, aes(x=as.numeric(X), y=Y)) + 
+    geom_point(size=3, colour = "purple") +
+    theme_classic() +
+    xlab("rank") +
+    ylab ("-log10 pval")
+dev.off()
+```
+## ChromHMM and PAX3::FOXO1 Binding Overlap in Developmental Zebrafish - Figure S4H
+```{bash}
+ml purge
+ml load GCC/10.3.0 \
+        BEDTools/2.30.0
+
+bedtools intersect \
+    -wb \
+    -a chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind.bed \
+    -b chip/zebrafish_dev/inputs/dome_chromHMM.bed \
+        > chip/zebrafish_dev/peak_overlaps/p3f_domeChromHMM.bed
+
+bedtools intersect \
+    -wb \
+    -a chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind.bed \
+    -b chip/zebrafish_dev/inputs/epi75_chromHMM.bed \
+        > chip/zebrafish_dev/peak_overlaps/p3f_epi75ChromHMM.bed
+```
+## Heatmap for histone marks with active chromatin and P3F sites - Figure S4I
+```{bash}
+module purge
+module load GCC/9.3.0 \
+            OpenMPI/4.0.3 \
+            deepTools/3.3.1-Python-3.8.2
+
+rep1Array=( chip/p3f/2mil_pcChIP/outputs/zebrafish_dev/Shield_ctrl_ATAC_average.bigwig
+            chip/p3f/2mil_pcChIP/outputs/zebrafish_dev/Shield_ctrl_H3K27ac_average.bigwig
+            chip/p3f/2mil_pcChIP/outputs/zebrafish_dev/Shield_ctrl_H3K4me1_average.bigwig
+            chip/p3f/2mil_pcChIP/outputs/zebrafish_dev/Shield_ctrl_H3K4me3_average.bigwig
+            chip/p3f/2mil_pcChIP/outputs/zebrafish_dev/Shield_ctrl_H2AK119ub_average.bigwig
+            chip/p3f/2mil_pcChIP/outputs/zebrafish_dev/Shield_ctrl_H3K27me3_average.bigwig)
+R1=${rep1Array[$SLURM_ARRAY_TASK_ID]}
+
+NameArray=(       ATAC
+                  H3K27ac
+                  H3K4me1
+                  H3K4me3
+                  H2AK119ub
+                  H3K27me3)
+nameArray=${NameArray[$SLURM_ARRAY_TASK_ID]}
+
+colorArray=(      Blues
+                  BuGn
+                  PuBu
+                  BuPu
+                  YlGn
+                  GnBu)
+colorArray=${colorArray[$SLURM_ARRAY_TASK_ID]}
+
+computeMatrix reference-point \
+  -S    ${R1} \
+  -R    chip/p3f/2mil_pcChIP/outputs/zebrafish_dev/peaks/cntl.h3k27ac_danRer7.bed \ # converted with UCSC liftOver from Cntl h3k27ac peaks
+        chip/p3f/2mil_pcChIP/outputs/zebrafish_dev/peaks/pcP3F_diffBind_danRer7.bed \ # converted with UCSC liftOver from P3F peaks
+  -b 3000 \
+  -a 3000 \
+  --referencePoint center \
+  -bs=1 \
+  -p=max \
+  --missingDataAsZero \
+  -o chip/p3f/2mil_pcChIP/outputs/zebrafish_dev/heatmaps/p3fsites_epigeneticContext_wu_${nameArray}.matrix.gz
+plotHeatmap \
+      -m chip/p3f/2mil_pcChIP/outputs/zebrafish_dev/heatmaps/p3fsites_epigeneticContext_wu_${nameArray}.matrix.gz \
+      -o chip/p3f/2mil_pcChIP/outputs/zebrafish_dev/heatmaps/p3fsites_epigeneticContext_wu_${nameArray}.pdf \
+      --regionsLabel h3k27ac p3f \
+      --samplesLabel ${nameArray} \
+      --colorMap=${colorArray}
+
+# DNA methylation
+ml purge
+ml load GCCcore/11.2.0 \
+        Python/3.9.6
+pip install deeptools
+
+computeMatrix reference-point \
+  -S  /home/gdkendalllab/lab/analyses/rsjxk002/P3F_paper2/chip/p3f_overlap/inputs/lee_meDIP/SRR1037425.bam.bigwig \
+  -R  $WORKDIR/chip/h3k27ac/pcChIP/pipeline_outputs/peaks/Ctrl_consensus.bed \ # these are all danRer11
+      chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind.bed \
+  --referencePoint center \
+  -b 3000 \
+  -a 3000 \
+  -bs=1 \
+  -p=max \
+  --missingDataAsZero \
+  -o outputs/heatmaps/dnaMethyl-k27acPeaks-kucinski_at6hpf.matrix.gz
+plotHeatmap \
+      -m chip/p3f/2mil_pcChIP/outputs/zebrafish_dev/heatmaps/dnaMethyl-k27acPeaks-kucinski_at6hpf.matrix.gz \
+      -o chip/p3f/2mil_pcChIP/outputs/zebrafish_dev/heatmaps/dnaMethyl-k27acPeaks-kucinski_at6hpf.pdf \
+      --regionsLabel 6hpf_k27acPeaks p3f_bindingSites \
+      --samplesLabel dnaMethyl_6h \
+      --colorMap Greens
+```
+## ATAC-seq PCA to differentially accessible sites in P3F-injected embryos - Figure 4A
+```{r}
+library(DiffBind)
+setwd("atac/outputs/timecourse_pca")
+samples <- data.frame(
+ SampleID=c("256cell_rep1","256cell_rep2","high_rep1","high_rep2","high_rep3","oblong_rep1",
+            "oblong_rep2","oblong_rep3","sphere_rep1","sphere_rep2","sphere_rep3",
+            "dome_rep1","dome_rep2","dome_rep3",
+            "shield_rep1","shield_rep2","80epi_rep1","80epi_rep2","P3F_rep1","P3F_rep2",
+            "cntl_rep1","cntl_rep2"),
+ Condition=c(rep("256cell",2),rep("high",3),rep("oblong",3),rep("sphere",3),rep("dome",3),
+             rep("shield",2),rep("80epi",2),rep("P3F",2),rep("cntl",2)),
+ Tissue=rep("zebrafish",22),
+ Factor=c(rep("256cell",2),rep("high",3),rep("oblong",3),rep("sphere",3),rep("dome",3),
+             rep("shield",2),rep("80epi",2),rep("P3F",2),rep("cntl",2)),
+ Replicate=c(1:2,1:3,1:3,1:3,1:3,1:2,1:2,1:2,1:2),
+ bamReads=c(
+ "$workdir/encode_atac_256cell/align/rep1/SRR9032650_1.trim.srt.nodup.no_chrM_MT.bam",
+ "$workdir/encode_atac_256cell/align/rep2/SRR9032651_1.trim.srt.nodup.no_chrM_MT.bam",
+ "$workdir/encode_atac_high/align/rep1/SRR9032662_1.trim.srt.nodup.no_chrM_MT.bam",
+ "$workdir/encode_atac_high/align/rep2/SRR9032663_1.trim.srt.nodup.no_chrM_MT.bam",
+ "$workdir/encode_atac_high/align/rep3/SRR9032664_1.trim.srt.nodup.no_chrM_MT.bam",
+ "/$workdir/encode_atac_oblong/align/rep1/SRR9032665_1.trim.srt.nodup.no_chrM_MT.bam",
+ "$workdir/encode_atac_oblong/align/rep2/SRR9032666_1.trim.srt.nodup.no_chrM_MT.bam",
+ "$workdir/encode_atac_oblong/align/rep3/SRR9032667_1.trim.srt.nodup.no_chrM_MT.bam",
+ "$workdir/encode_atac_sphere/align/rep1/SRR9032674_1.trim.srt.nodup.no_chrM_MT.bam",
+ "$workdir/encode_atac_sphere/align/rep2/SRR9032675_1.trim.srt.nodup.no_chrM_MT.bam",
+ "$workdir/encode_atac_sphere/align/rep3/SRR9032676_1.trim.srt.nodup.no_chrM_MT.bam",
+ "$workdir/encode_atac_dome/align/rep1/SRR9032658_1.trim.srt.nodup.no_chrM_MT.bam",
+ "$workdir/encode_atac_dome/align/rep2/SRR9032659_1.trim.srt.nodup.no_chrM_MT.bam",
+ "$workdir/encode_atac_dome/align/rep3/SRR9032660_1.trim.merged.srt.nodup.no_chrM_MT.bam",
+ "$workdir/encode_atac_shield/align/rep1/SRR9032668_1.trim.merged.srt.nodup.no_chrM_MT.bam",
+ "$workdir/encode_atac_shield/align/rep2/SRR9032671_1.trim.merged.srt.nodup.no_chrM_MT.bam",
+ "$workdir/encode_atac_80epi/align/rep1/SRR9032652_1.trim.merged.srt.nodup.no_chrM_MT.bam",
+ "$workdir/encode_atac_80epi/align/rep2/SRR9032655_1.trim.merged.srt.nodup.no_chrM_MT.bam",
+ "$workdir/encode_atac_p3f/align/rep1/JPK0044_S1_L001_R1_001.trim.srt.nodup.no_chrM_MT.bam",
+ "$workdir/encode_atac_p3f/align/rep2/JPK0046_S3_L001_R1_001.trim.srt.nodup.no_chrM_MT.bam",
+ "$workdir/encode_atac_ctrl/align/rep1/JPK0045_S2_L001_R1_001.trim.srt.nodup.no_chrM_MT.bam",
+ "$workdir/encode_atac_ctrl/align/rep2/JPK0047_S4_L001_R1_001.trim.srt.nodup.no_chrM_MT.bam"),
+ Peaks=rep("$workdir/ATAC_p3f_vs_ctrl_peaks_DiffBind_ovl2_2reps.bed",22),
+ PeakFormat=rep("narrow",22))
+file.exists(samples$Peaks)
+file.exists(samples$bamReads)
+dev_atac <- dba(sampleSheet=samples)
+dev_atac.counts <- dba.count(dev_atac,bParallel=TRUE)
+pdf("palfy_ataccomparison_differentialP3F_all.pdf")
+plot(dev_atac.counts,margin=15)
+dba.plotPCA(dev_atac.counts)
+dba.plotPCA(dev_atac.counts,components=c(1,3))
+dev.off()
+```
+## Download more ATAC-seq (Liu et al., 2018, 10.1101/gr.228833.117 )
+```{bash}
+cd $WORKDIR
+# samples were run through encode_atac pipeline as done for experimental groups
+# pipeline outputs were put into atac/inputs/Liu2018/encode_outputs
+```
+## ATAC signal at P3F binding sites during developmental - Figure 3H
+```{bash}
+cd $WORKDIR
+ml purge
+ml load GCC/10.3.0 \
+        BEDTools/2.30.0
+
+bedtools subtract \
+    -A \
+    -a chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind.bed \
+    -b atac/inputs/Liu2018/encode_outputs/256cell/peak/overlap_reproducibility/overlap.optimal_peak.narrowPeak.gz \
+            > atac/outputs/timecourse_atac/liu_p3f_noATAC_256cell.bed
+
+bedtools subtract \
+    -A \
+    -a chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind.bed \
+    -b atac/inputs/Liu2018/encode_outputs/64cell/peak/overlap_reproducibility/overlap.optimal_peak.narrowPeak.gz \
+            > atac/outputs/timecourse_atac/liu_p3f_noATAC_64cell.bed
+
+bedtools subtract \
+    -A \
+    -a chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind.bed \
+    -b atac/inputs/Liu2018/encode_outputs/1kcell/peak/overlap_reproducibility/overlap.optimal_peak.narrowPeak.gz \
+            > atac/outputs/timecourse_atac/liu_p3f_noATAC_1kcell.bed
+
+bedtools subtract \
+    -A \
+    -a chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind.bed \
+    -b atac/inputs/Liu2018/encode_outputs/dome/peak/overlap_reproducibility/overlap.optimal_peak.narrowPeak.gz \
+            > atac/outputs/timecourse_atac/liu_p3f_noATAC_dome.bed
+
+bedtools subtract \
+    -A \
+    -a chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind.bed \
+    -b atac/inputs/Liu2018/encode_outputs/oblong/peak/overlap_reproducibility/overlap.optimal_peak.narrowPeak.gz \
+            > atac/outputs/timecourse_atac/liu_p3f_noATAC_oblong.bed
+
+bedtools subtract \
+    -A \
+    -a chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind.bed \
+    -b $workdir/encode_atac_256cell/peak/overlap_reproducibility/overlap.optimal_peak.narrowPeak.gz \
+            > atac/outputs/timecourse_atac/palfy_p3f_noATAC_256cell.bed
+
+bedtools subtract \
+    -A \
+    -a chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind.bed \
+    -b $workdir/encode_atac_80epi/peak/overlap_reproducibility/overlap.optimal_peak.narrowPeak.gz \
+            > atac/outputs/timecourse_atac/palfy_p3f_noATAC_80epi.bed
+
+bedtools subtract \
+    -A \
+    -a chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind.bed \
+    -b $workdir/encode_atac_dome/peak/overlap_reproducibility/overlap.optimal_peak.narrowPeak.gz \
+            > atac/outputs/timecourse_atac/palfy_p3f_noATAC_dome.bed
+
+bedtools subtract \
+    -A \
+    -a chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind.bed \
+    -b $workdir/encode_atac_high/peak/overlap_reproducibility/overlap.optimal_peak.narrowPeak.gz \
+            > atac/outputs/timecourse_atac/palfy_p3f_noATAC_high.bed
+
+bedtools subtract \
+    -A \
+    -a chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind.bed \
+    -b $workdir/encode_atac_oblong/peak/overlap_reproducibility/overlap.optimal_peak.narrowPeak.gz \
+            > atac/outputs/timecourse_atac/palfy_p3f_noATAC_oblong.bed
+
+bedtools subtract \
+    -A \
+    -a chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind.bed \
+    -b $workdir/encode_atac_shield/peak/overlap_reproducibility/overlap.optimal_peak.narrowPeak.gz \
+            > atac/outputs/timecourse_atac/palfy_p3f_noATAC_shield.bed
+
+bedtools subtract \
+    -A \
+    -a chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind.bed \
+    -b $workdir/encode_atac_sphere/peak/overlap_reproducibility/overlap.optimal_peak.narrowPeak.gz \
+            > atac/outputs/timecourse_atac/palfy_p3f_noATAC_sphere.bed
+
+bedtools subtract \
+    -A \
+    -a chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind.bed \
+    -b $workdir/encode_atac_ctrl/peak/overlap_reproducibility/overlap.optimal_peak.narrowPeak.gz \
+            > atac/outputs/timecourse_atac/kucinski_p3f_noATAC_cntl.bed
+```
+## ATAC signal at P3F binding sites during developmental - Figure S4G
+```{bash}
+ml purge
+ml load GCC/10.3.0 \
+        BEDTools/2.30.0
+
+bedtools subtract \
+    -A \
+    -a chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind_ATAC.bed \
+    -b atac/outputs/timecourse_atac/palfy_p3f_noATAC_80epi.bed \
+            > atac/outputs/timecourse_atac/palfy_p3f_open_80epi.bed
+
+bedtools subtract \
+    -A \
+    -a chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind_ATAC.bed \
+    -b atac/outputs/timecourse_atac/palfy_p3f_open_80epi.bed \
+            > atac/outputs/timecourse_atac/palfy_p3f_opening_80epi.bed
+
+computeMatrix reference-point \
+  -S  atac/inputs/Liu2018/encode_outputs/64cell/signal/pooled-rep/rep.pooled.fc.signal.bigwig \
+      atac/inputs/Liu2018/encode_outputs/256cell/signal/pooled-rep/rep.pooled.fc.signal.bigwig \
+      /atac/inputs/Liu2018/encode_outputs/1kcell/signal/pooled-rep/rep.pooled.fc.signal.bigwig \
+      atac/inputs/Liu2018/encode_outputs/oblong/signal/pooled-rep/rep.pooled.fc.signal.bigwig \
+      atac/inputs/Liu2018/encode_outputs/dome/signal/pooled-rep/rep.pooled.fc.signal.bigwig \
+  -R        atac/outputs/timecourse_atac/palfy_p3f_open_80epi.bed \
+            atac/outputs/timecourse_atac/palfy_p3f_opening_80epi.bed \
+            chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind_noATAC.bed \
+  --referencePoint center \
+  -b 3000 \
+  -a 3000 \
+  -bs=1 \
+  -p=max \
+  --missingDataAsZero \
+  -o atac/outputs/timecourse_atac/liu_atacTimecourse_atP3Fsites_rev.matrix.gz
+plotHeatmap \
+      -m atac/outputs/timecourse_atac/liu_atacTimecourse_atP3Fsites_rev.matrix.gz \
+      -o atac/outputs/timecourse_atac/liu_atacTimecourse_atP3Fsites_rev.pdf \
+      --regionsLabel alwaysOpen opening non-accessible \
+      --samplesLabel 64cell 256cell 1kcell oblong dome \
+      --colorMap=Blues
+
+computeMatrix reference-point \
+  -S $workdir/encode_atac_256cell/signal/pooled-rep/rep.pooled.fc.signal.bigwig \
+      $workdir/encode_atac_high/signal/pooled-rep/rep.pooled.fc.signal.bigwig \
+      $workdir/encode_atac_oblong/signal/pooled-rep/rep.pooled.fc.signal.bigwig \
+      $workdir/encode_atac_sphere/signal/pooled-rep/rep.pooled.fc.signal.bigwig \
+      $workdir/encode_atac_dome/signal/pooled-rep/rep.pooled.fc.signal.bigwig \
+      $workdir/encode_atac_shield/signal/pooled-rep/rep.pooled.fc.signal.bigwig \
+      $workdirs/encode_atac_80epi/signal/pooled-rep/rep.pooled.fc.signal.bigwig \
+  -R        atac/outputs/timecourse_atac/palfy_p3f_open_80epi.bed \
+            atac/outputs/timecourse_atac/palfy_p3f_opening_80epi.bed \
+            chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind_noATAC.bed \
+  --referencePoint center \
+  -b 2000 \
+  -a 2000 \
+  -bs=1 \
+  -p=max \
+  --missingDataAsZero \
+  -o atac/outputs/timecourse_atac/palfy_atacTimecourse_atP3Fsites_rev.matrix.gz
+plotHeatmap \
+      -m atac/outputs/timecourse_atac/palfy_atacTimecourse_atP3Fsites_rev.matrix.gz \
+      -o atac/outputs/timecourse_atac/palfy_atacTimecourse_atP3Fsites_rev.pdf \
+      --regionsLabel alwaysOpen opening non-accessible \
+      --samplesLabel c256 high oblong sphere dome shield 80epi \
+      --colorMap=Blues
+```
+## ATAC-seq signal at binding sites - Figure 3A
+```{bash}
+cd /home/gdkendalllab/lab/analyses/rsjxk002/P3F_at6hpf_jack/chip/p3f/2mil_pcChIP/outputs/atacOverlap/numbers
+
+ml load GCC/10.3.0 \
+        BEDTools/2.30.0 \
+        SAMtools/1.15
+
+localEnrichmentBed.py \
+  -b $workdir/encode_atac_p3f/align/rep1/JPK0044_S1_L001_R1_001.trim.srt.nodup.no_chrM_MT.bam \
+  -t chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind.bed \
+  --slop 10.0 \
+  > atacEnrichment_p3f_1.bed
+
+localEnrichmentBed.py \
+  -b $workdir/encode_atac_p3f/align/rep2/JPK0046_S3_L001_R1_001.trim.srt.nodup.no_chrM_MT.bam \
+  -t chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind.bed \
+  --slop 10.0 \
+  > atacEnrichment_p3f_2.bed
+
+localEnrichmentBed.py \
+  -b $workdir/encode_atac_ctrl/align/rep1/JPK0045_S2_L001_R1_001.trim.srt.nodup.no_chrM_MT.bam \
+  -tchip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind.bed \
+  --slop 10.0 \
+  > atacEnrichment_cntl_1.bed
+
+localEnrichmentBed.py \
+  -b $workdir/encode_atac_ctrl/align/rep2/JPK0047_S4_L001_R1_001.trim.srt.nodup.no_chrM_MT.bam \
+  -t chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind.bed \
+  --slop 10.0 \
+  > atacEnrichment_cntl_2.bed
+```
+```{r}
+library(tidyverse)
+setwd("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/atacOverlap/numbers")
+p3f1 <- read.delim("atacEnrichment_p3f_1.bed", header=FALSE)
+p3f2 <- read.delim("atacEnrichment_p3f_2.bed", header=FALSE)
+cntl1 <- read.delim("atacEnrichment_cntl_1.bed", header=FALSE)
+cntl2 <- read.delim("atacEnrichment_cntl_2.bed", header=FALSE)
+
+p3f1$P3F1 <- p3f1$V9
+p3f1$P3F2 <- p3f2$V9
+p3f1$CNTL1 <- cntl1$V9
+p3f1$CNTL2 <- cntl2$V9
+df <- subset(p3f1, select = c(P3F1, P3F2, CNTL1, CNTL2))
+write.csv(df, "atacEnrichment_localBackground.csv", row.names=TRUE)
+# calculate mean of P3F and CNTL in excel and save file and stack in column the averages 
+df2 <- read.csv("atacEnrichment_localBackground_summary.csv")
+df2$Signal <- sapply(sapply(df2$Signal, as.character), as.numeric)
+pdf("ATACseq_atP3FlocalBackground_boxplot.pdf")
+ggplot(df2, aes(x=as.factor(Condition), y=Signal)) + 
+    geom_boxplot(alpha=0.4) + 
+    theme_classic() +
+    xlab("Condition") +
+    ylab ("logFC (Peak/LocalBackground")
+dev.off()
+```
+## Accessibility at individual motifs - Figure S4J
+```{bash}
+# find motifs
+module purge
+module load homer/4.11.1
+
+rep1Array=( chip/p3f/2mil_pcChIP/outputs/homer/p3f_size75bp/knownResults/known1.motif
+            chip/p3f/2mil_pcChIP/outputs/homer/p3f_size75bp/knownResults/known2.motif
+            chip/p3f/2mil_pcChIP/outputs/homer/p3f_size75bp/knownResults/known3.motif
+            chip/p3f/2mil_pcChIP/outputs/homer/p3f_size75bp/knownResults/known4.motif
+            chip/p3f/2mil_pcChIP/outputs/homer/p3f_size75bp/knownResults/known5.motif
+            chip/p3f/2mil_pcChIP/outputs/homer/p3f_size75bp/knownResults/known6.motif
+            chip/p3f/2mil_pcChIP/outputs/homer/p3f_size75bp/knownResults/known7.motif
+            chip/p3f/2mil_pcChIP/outputs/homer/p3f_size75bp/knownResults/known8.motif
+            chip/p3f/2mil_pcChIP/outputs/homer/p3f_size75bp/knownResults/known9.motif
+            chip/p3f/2mil_pcChIP/outputs/homer/p3f_size75bp/knownResults/known10.motif
+            chip/p3f/2mil_pcChIP/outputs/homer/p3f_size75bp/knownResults/known11.motif
+            chip/p3f/2mil_pcChIP/outputs/homer/p3f_size75bp/knownResults/known12.motif
+            chip/p3f/2mil_pcChIP/outputs/homer/p3f_size75bp/knownResults/known13.motif
+            chip/p3f/2mil_pcChIP/outputs/homer/p3f_size75bp/knownResults/known14.motif
+            chip/p3f/2mil_pcChIP/outputs/homer/p3f_size75bp/knownResults/known15.motif
+            chip/p3f/2mil_pcChIP/outputs/homer/p3f_size75bp/knownResults/known16.motif
+            chip/p3f/2mil_pcChIP/outputs/homer/p3f_size75bp/knownResults/known17.motif
+            chip/p3f/2mil_pcChIP/outputs/homer/p3f_size75bp/knownResults/known18.motif
+            chip/p3f/2mil_pcChIP/outputs/homer/p3f_size75bp/knownResults/known19.motif
+            chip/p3f/2mil_pcChIP/outputs/homer/p3f_size75bp/knownResults/known20.motif)
+R1=${rep1Array[$SLURM_ARRAY_TASK_ID]}
+baseName=${R1##*/}
+baseName=${baseName%%.*}
+
+scanMotifGenomeWide.pl \
+    ${R1} \
+    danRer11.fa \
+    -bed \
+    > atac/outputs/motif_accessibility/${baseName}.bed
+
+# p3f-bound
+rep1Array=( atac/outputs/motif_accessibility/known1.bed
+            atac/outputs/motif_accessibility/known2.bed
+            atac/outputs/motif_accessibility/known3.bed
+            atac/outputs/motif_accessibility/known4.bed
+            atac/outputs/motif_accessibility/known5.bed
+            atac/outputs/motif_accessibility/known6.bed
+            atac/outputs/motif_accessibility/known7.bed
+            atac/outputs/motif_accessibility/known8.bed
+            atac/outputs/motif_accessibility/known9.bed
+            atac/outputs/motif_accessibility/known10.bed
+            atac/outputs/motif_accessibility/known11.bed
+            atac/outputs/motif_accessibility/known12.bed
+            atac/outputs/motif_accessibility/known13.bed
+            atac/outputs/motif_accessibility/known14.bed
+            atac/outputs/motif_accessibility/known15.bed
+            atac/outputs/motif_accessibility/known16.bed
+            atac/outputs/motif_accessibility/known17.bed
+            atac/outputs/motif_accessibility/known18.bed
+            atac/outputs/motif_accessibility/known19.bed
+            atac/outputs/motif_accessibility/known20.bed)
+R1=${rep1Array[$SLURM_ARRAY_TASK_ID]}
+baseName=${R1##*/}
+baseName=${baseName%%.*}
+
+bedtools intersect \
+    -wa \
+    -u \
+    -a ${R1}\
+    -bp3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind.bed \
+        > atac/outputs/motif_accessibility/${baseName}_bound.bed
+
+# p3f-bound and atac overlap
+ml purge
+ml load GCC/10.3.0 \
+        BEDTools/2.30.0 \
+        SAMtools/1.15
+
+rep1Array=( atac/outputs/motif_accessibility/known1_bound.bed
+            atac/outputs/motif_accessibility/known2_bound.bed
+            atac/outputs/motif_accessibility/known3_bound.bed
+            atac/outputs/motif_accessibility/known4_bound.bed
+            atac/outputs/motif_accessibility/known5_bound.bed
+            atac/outputs/motif_accessibility/known6_bound.bed
+            atac/outputs/motif_accessibility/known7_bound.bed
+            atac/outputs/motif_accessibility/known8_bound.bed
+            atac/outputs/motif_accessibility/known9_bound.bed
+            atac/outputs/motif_accessibility/known10_bound.bed
+            atac/outputs/motif_accessibility/known11_bound.bed
+            atac/outputs/motif_accessibility/known12_bound.bed
+            atac/outputs/motif_accessibility/known13_bound.bed
+            atac/outputs/motif_accessibility/known14_bound.bed
+            atac/outputs/motif_accessibility/known15_bound.bed
+            atac/outputs/motif_accessibility/known16_bound.bed
+            atac/outputs/motif_accessibility/known17_bound.bed
+            atac/outputs/motif_accessibility/known18_bound.bed
+            atac/outputs/motif_accessibility/known19_bound.bed
+            atac/outputs/motif_accessibility/known20_bound.bed)
+R1=${rep1Array[$SLURM_ARRAY_TASK_ID]}
+baseName=${R1##*/}
+baseName=${baseName%%.*}
+
+bedtools intersect \
+    -wa \
+    -u \
+    -a ${R1}\
+    -b $workdir/encode_atac_ctrl/peak/overlap_reproducibility/overlap.optimal_peak.narrowPeak.gz \
+        > atac/outputs/motif_accessibility/${baseName}_bound_cntlATAC.bed
+
+bedtools intersect \
+    -wa \
+    -u \
+    -a ${R1}\
+    -b $workdir/encode_atac_p3f/peak/overlap_reproducibility/overlap.optimal_peak.narrowPeak.gz \
+        > atac/outputs/motif_accessibility/${baseName}_bound_p3fATAC.bed
+# peak numbers were stored in P3F_boundMotifs_ATACOverlap.csv
+```
+```{r}
+setwd("$WORKDIR/atac/outputs/motif_accessibility")
+
+data <- read.csv("P3F_boundMotifs_ATACOverlap.csv")
+data <- subset(data, select = c("motif" , "Fraction_ATACinCNTL", "Fraction_ATACinP3F"))
+long_data <- pivot_longer(
+  data,
+  cols = c(Fraction_ATACinP3F, Fraction_ATACinCNTL),
+  names_to = "Condition",
+  values_to = "Accessibility")
+long_data$motif <- factor(long_data$motif, levels = unique(long_data$motif))
+
+pdf("individualMotif_accessibility.pdf")
+ggplot(long_data, aes(x = motif, y = Condition, size = Accessibility, fill = Condition)) +
+  geom_point(shape = 21, color = "black", alpha = 0.7) + 
+  scale_size_area() +
+  scale_fill_manual(values = c("Fraction_ATACinCNTL" = "grey", "Fraction_ATACinP3F" = "purple")) +
+  theme_minimal() +
+  labs(
+    title = "Motif Accessibility Dot Plot",
+    x = "Motif",
+    y = "Condition",
+    size = "Accessibility",
+    fill = "Condition"
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "bottom",
+    legend.direction = "vertical")
+dev.off()
+```
+## Identify differentially H3K27Ac genes - Figure 4J
+```{bash}
+cd $WORKDIR
+ml purge
+ml load GCC/10.3.0 \
+        BEDTools/2.30.0
+
+bedtools intersect \
+  -wa \
+  -u \
+  -a $workdir/ABC-results-DS-rerun3/P3F/Predictions/EnhancerPredictionsFull_threshold0.02_self_promoter.bedpe \
+  -b $WORKDIR/chip/h3k27ac/pcChIP/outputs/peaks/p3f.enriched_H3K27Ac.bed \
+        > chip/h3k27ac/pcChIP/outputs/enhancer_targets/ABCEnhancers_activatedEnhancers.bedpe
+```
+```{r}
+library(stringr)
+setwd("$WORKDIR/chip/h3k27ac/pcChIP/outputs/enhancer_targets/")
+enh <- read.delim("$WORKDIR/chip/h3k27ac/pcChIP/outputs/enhancer_targets/ABCEnhancers_activatedEnhancers.bedpe", header = FALSE)
+genes <- enh$V7
+genes <- sapply(str_split(genes,"_",),'[',1)
+genes = genes[!duplicated(genes)]
+write.table(genes, "activatedEnhancer_ABCTargets.txt", col.names= FALSE, row.names = FALSE)
+# run table through DAVID for BP5
+```
+```{bash}
+ml purge
+ml load GCC/10.3.0 \
+        BEDTools/2.30.0
+
+bedtools intersect \
+  -wa \
+  -u \
+  -a $workdir/ABC-results-DS-rerun3/CTRL/Predictions/EnhancerPredictionsFull_threshold0.02_self_promoter.bedpe \
+  -b $WORKDIR/chip/h3k27ac/pcChIP/outputs/peaks/cntl.enriched_H3K27Ac.bed \
+        > ABCEnhancers_repressedEnhancers.bedpe
+```
+```{r}
+library(stringr)
+setwd("$WORKDIR/chip/h3k27ac/pcChIP/outputs/enhancer_targets/")
+enh <- read.delim("ABCEnhancers_repressedEnhancers.bedpe", header = FALSE)
+genes <- enh$V7
+genes <- sapply(str_split(genes,"_",),'[',1)
+genes = genes[!duplicated(genes)]
+write.table(genes, "repressedEnhancer_ABCTargets.txt", col.names= FALSE, row.names = FALSE)
+# run table through DAVID for BP5
+```
+## PAX3::FOXO1 Overlap with H3K27Ac - Figure S9D
+```{bash}
+cd chip/h3k27ac/pcChIP/outputs/p3fOverlap
+ml purge
+ml load GCC/10.3.0 \
+        BEDTools/2.30.0
+
+bedtools intersect \
+  -wa \
+  -u \
+  -a $WORKDIR/chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind.bed \
+  -b $WORKDIR/chip/h3k27ac/pcChIP/outputs/peaks/p3f.enriched_H3K27Ac.bed \
+        > P3F_activatedH3K27ac.bed
+
+bedtools intersect \
+  -wa \
+  -u \
+  -a $WORKDIR/chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind.bed \
+  -b $WORKDIR/chip/h3k27ac/pcChIP/outputs/peaks/cntl.enriched_H3K27Ac.bed \
+        > P3F_repressedH3K27ac.bed
+
+bedtools intersect \
+  -wa \
+  -u \
+  -a $WORKDIR/chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind.bed \
+  -b /$WORKDIR/chip/h3k27ac/pcChIP/outputs/peaks/P3F_consensus.bed \
+        > P3F_H3K27acP3F.bed
+
+bedtools intersect \
+  -wa \
+  -u \
+  -a $WORKDIR/chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind.bed \
+  -b $WORKDIR/chip/h3k27ac/pcChIP/outputs/peaks//Ctrl_consensus.bed \
+        > P3F_H3K27acCNTL.bed
+
+bedtools subtract \
+  -A \
+  -a $WORKDIR/chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind.bed \
+  -b /$WORKDIR/chip/h3k27ac/pcChIP/outputs/peaks/Ctrl_consensus.bed \
+        > P3F_noH3K27acCNTL.bed
+
+bedtools subtract \
+  -A \
+  -a $WORKDIR/chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind.bed \
+  -b $WORKDIR/chip/h3k27ac/pcChIP/outputs/peaks/P3F_consensus.bed \
+        > P3F_noH3K27acP3F.bed
+
+bedtools intersect \
+  -wa \
+  -u \
+  -a P3F_H3K27acP3F.bed \
+  -b P3F_repressedH3K27ac.bed \
+        > repressed_subset_fromK27ac.bed
+
+bedtools intersect \
+  -wa \
+  -u \
+  -a P3F_noH3K27acP3F.bed \
+  -b P3F_repressedH3K27ac.bed \
+        > repressed_subset_fromNOK27ac.bed
+
+bedtools intersect \
+  -wa \
+  -u \
+  -a P3F_noH3K27acP3F.bed \
+  -b P3F_noH3K27acCNTL.bed \
+        > P3F_alwaysabsentH3K27ac.bed
+
+bedtools intersect \
+  -wa \
+  -u \
+  -a P3F_noH3K27acP3F.bed \
+  -b P3F_noH3K27acCNTL.bed \
+        > P3F_alwaysabsentH3K27ac.bed
+```
+## Expression of enriched motif genes - Figure S4K
+```{r}
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+setwd("$WORKDIR/rnaseq/analysis/motif_expression/")
+
+# data from rna-seq normalized reads table
+data <- data.frame(
+  Gene = c("pax7a", "pax7b", "dlx2a", "eng1a", "eng1b", "dlx1a", "nkx6.1", "lhx3", "lhx1a", "dlx5a", "isl1", "onecutl", "lhx9", "dlx3b", "pax3a", "pax3b"),
+  CNTL = c(0.25, 98, 8.75, 3.5, 33.5, 4.75, 83.25, 3, 1623.75, 11.25, 6.5, 739.5, 2.25, 764.25, 11.75, 70),
+  P3F = c(686, 218.75, 103, 332.75, 41.75, 772, 235, 439, 645, 567.25, 136.25, 369.25, 8.5, 75, 776, 608.25))
+
+long_data <- pivot_longer(
+  data,
+  cols = c(CNTL, P3F),
+  names_to = "Condition",
+  values_to = "Expression")
+
+pdf("motifGenes_expression.pdf")
+ggplot(long_data, aes(x = Gene, y = Condition, size = Expression, fill = Condition)) +
+  geom_point(shape = 21, color = "black", alpha = 0.7) + 
+  scale_size_area() +
+  scale_fill_manual(values = c("CNTL" = "grey", "P3F" = "purple")) +
+  theme_minimal() +
+  labs(
+    title = "Gene Expression Dot Plot",
+    x = "Gene",
+    y = "Condition",
+    size = "Expression",
+    fill = "Condition"
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "right")
+dev.off()
+```
+## Identifying PAX3::FOXO1 direct targets
+```{bash}
+cd $WORKDIR/chip/p3f/2mil_pcChIP/outputs/targets/
+ml purge
+ml load GCC/10.3.0 \
+        BEDTools/2.30.0
+
+bedtools intersect \
+  -wa \
+  -u \
+  -a $workdir/ABC-results-DS-rerun3/P3F/Predictions/EnhancerPredictionsFull_threshold0.02_self_promoter.bedpe \
+  -b chip/p3f/2mil_pcChIP/outputs/peaks/pcP3F_diffBind.bed \
+        > P3FTargets_ABCEnhancers.bedpe
+```
+```{r}
+library(stringr)
+setwd("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/targets")
+enh <- read.delim("P3FTargets_ABCEnhancers.bedpe", header = FALSE)
+genes <- enh$V7
+genes <- sapply(str_split(genes,"_",),'[',1)
+genes = genes[!duplicated(genes)]
+write.table(genes, "P3FTargets_ABCTargets.tsv", col.names= FALSE, row.names = FALSE)
+```
+## Expression of Targets - Figure 7B
+```{r}
+library(tidyverse)
+setwd("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/targets")
+
+rna <- read.delim("$WORKDIR/rnaseq/cennypipeline/outputs/diff_analysis_rslt/tables/P3FvsCNTL_FDR1.5_ALL.txtP3FvsCNTL_FC1.5_ALL.txt")
+chip <- read.delim("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/targets/P3FTargets_ABCTargets.tsv", header = FALSE)
+
+rna$Overlap = rna$Id %in% chip$V1
+chip1 <- rna[rna$Overlap != "FALSE", ]
+exp <- subset(chip1, select = c(Id, geneSymbol, log2FoldChange))
+write.csv(exp, "P3FTargets_expression.csv")
+## edit and save new P3FTargets_expression to _1 to separate up and down regulated, genes were separated into different csv files
+
+pdf("P3FTargets_expression.pdf")
+df2 <- read.csv("P3FTargets_expression_1.csv")
+df2$Signal <- sapply(sapply(df2$log2FoldChange, as.character), as.numeric)
+ggplot(df2, aes(x=as.factor(expression), y=log2FoldChange)) + 
+    geom_violin(alpha=0.4) + 
+    theme_classic() +
+    xlab("Gene Expression") +
+    ylab ("logFC")
+dev.off()
+```
+## Pathway analysis of upregulated genes - Figure 7D, S9B
+```{r}
+library(clusterProfiler)
+library("org.Dr.eg.db")
+OrgDb="org.Dr.eg.db"
+setwd("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/targets")
+
+df = read.csv("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/targets/P3FTargets_activated.csv", header = FALSE)
+pdf("P3FTargets_expresssionPathways.pdf")
+bp <- enrichGO(df$V1, ont = "BP", keyType = "SYMBOL", OrgDb = OrgDb)
+dotplot(bp)
+write.csv(bp, file = "P3FTargets_pathways.csv")
+dev.off()
+# ran upregulated and downregulated genes through DAVID
+```
+## Pathway analysis to cell states - Figure 7E
+```{r}
+library(clusterProfiler)
+library(tidyverse)
+library(msigdbr)
+setwd("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/targets")
+
+genes = read.csv("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/targets/P3FTargets_activated.csv", header = FALSE)
+
+geneset = msigdbr(species = "Danio rerio", category = "C5")
+geneSet = subset(geneset, select = c(gs_name, gene_symbol))
+
+pdf("P3FTargets_C5dataset.pdf")
+enricher <- enricher(genes$V1, TERM2GENE = geneSet)
+write.csv(enricher, "P3FTargets_C5dataset.csv")
+dotplot(enricher, showCategory = 6)
+barplot(enricher, showCategory = 6)
+dev.off()
+
+C8geneset = msigdbr(species = "Danio rerio", category = "C8")
+geneSet = subset(C8geneset, select = c(gs_name, gene_symbol))
+
+pdf("P3FTargets_C8dataset.pdf")
+enricher <- enricher(genes$V1, TERM2GENE = geneSet)
+write.csv(enricher, "P3FTargets_C8dataset.csv")
+dotplot(enricher, showCategory = 6)
+barplot(enricher, showCategory = 6)
+dev.off()
+```
+## Activated gene enhancers
+```{r}
+library(clusterProfiler)
+library(tidyverse)
+setwd("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/targets")
+
+genes <- read.csv("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/targets/P3FTargets_activated.csv", header = FALSE)
+enh <- read.delim("$workdir/ABC-results-DS-rerun3/P3F/Predictions/EnhancerPredictionsFull_threshold0.02_self_promoter.bedpe", header = FALSE)
+
+enh$V10 <- sapply(str_split(enh$V7,"_",),'[',1)
+enh$Overlap <- enh$V10 %in% genes$V1
+enh <- enh[enh$Overlap != "FALSE", ]
+enh <- subset(enh, select = c(V1, V2, V3, V4, V5, V6, V7, V8, V9))
+write.table(enh, file="activatedGene_enhancers_P3F.bed", sep="\t", quote=F, row.names=F, col.names=F)
+
+genes <- read.csv("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/targets/P3FTargets_activated.csv", header = FALSE)
+enh <- read.delim("$workdir/ABC-results-DS-rerun3/Ctrl/Predictions/EnhancerPredictionsFull_threshold0.02_self_promoter.bedpe", header = FALSE)
+
+enh$V10 <- sapply(str_split(enh$V7,"_",),'[',1)
+enh$Overlap <- enh$V10 %in% genes$V1
+enh <- enh[enh$Overlap != "FALSE", ]
+enh <- subset(enh, select = c(V1, V2, V3, V4, V5, V6, V7, V8, V9))
+write.table(enh, file="activatedGene_enhancers_CNTL.bed", sep="\t", quote=F, row.names=F, col.names=F)
+```
+## Activated TF pathway analysis
+```{r}
+library(clusterProfiler)
+library(tidyverse)
+library(org.Dr.eg.db)
+library(msigdbr)
+OrgDb="org.Dr.eg.db"
+setwd("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/targets/tfs")
+
+genes <- read.csv("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/targets/P3FTargets_activated.csv", header = FALSE)
+geneset = msigdbr(species = "Danio rerio", category = "C5")
+geneSet = subset(geneset, select = c(gs_name, gene_symbol))
+
+enricher <- enricher(genes$V1, TERM2GENE = geneSet, maxGSSize = 1500)
+write.csv(enricher, "P3FTargets_activated_pathways.csv")
+# took GOMF_DNA_BINDING_TRANSCRIPTION_FACTOR_ACTIVITY and listed TFs in P3F.TFtargets.csv
+```
+```{r}
+library(clusterProfiler)
+library(tidyverse)
+library(org.Dr.eg.db)
+library(msigdbr)
+OrgDb="org.Dr.eg.db"
+setwd("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/targets/tfs")
+
+genes <- read.csv("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/targets/tfs/P3F.TFTargets.csv", header = FALSE)
+enricher <- enrichGO(genes$V1, OrgDb, keyType = "SYMBOL")
+write.csv(enricher, "P3F.TFTargets_pathways.csv")
+
+genes <- read.csv("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/targets/tfs/P3F.TFTargets.csv", header = FALSE)
+exp <- enrichGO(genes$V1, OrgDb, keyType = "SYMBOL", ont = "BP")
+write.csv(exp, "test_pathways.csv")
+
+genes <- read.csv("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/targets/tfs/P3F.TFTargets.csv", header = FALSE)
+rna <- read.delim("$WORKDIR/rnaseq/cennypipeline/outputs/diff_analysis_rslt/tables/P3FvsCNTL_FDR1.5_ALL.txtP3FvsCNTL_FC1.5_ALL.txt")
+rna$Overlap = rna$Id %in% genes$V1
+genes1 <- rna[rna$Overlap != "FALSE", ]
+exp <- subset(genes1, select = c(Id, geneSymbol, log2FoldChange))
+write.csv(exp, "P3F.TFTargets_expression.csv")
+```
+## Repressed genes pathway analysis
+```{r}
+library(clusterProfiler)
+library(tidyverse)
+library(msigdbr)
+setwd("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/repressed")
+
+genes = read.csv("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/repressed/P3FTargets_repressed.csv", header = FALSE)
+
+geneset = msigdbr(species = "Danio rerio", category = "C5")
+geneSet = subset(geneset, select = c(gs_name, gene_symbol))
+
+pdf("P3FTargets_C5dataset.pdf")
+enricher <- enricher(genes$V1, TERM2GENE = geneSet)
+write.csv(enricher, "P3FTargets_repressed_C5dataset.csv")
+dotplot(enricher, showCategory = 6)
+barplot(enricher, showCategory = 6)
+dev.off()
+```
+## Repressed genes Enhancers - data for Figure S9E-F
+```{r}
+library(clusterProfiler)
+library(tidyverse)
+setwd("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/repressed")
+
+genes <- read.csv("P3FTargets_repressed.csv", header = FALSE)
+enh <- read.delim("$workdir/ABC-results-DS-rerun3/CTRL/Predictions/EnhancerPredictionsFull_threshold0.02_self_promoter.bedpe", header = FALSE)
+
+enh$V10 <- sapply(str_split(enh$V7,"_",),'[',1)
+enh$Overlap <- enh$V10 %in% genes$V1
+enh <- enh[enh$Overlap != "FALSE", ]
+enh <- subset(enh, select = c(V1, V2, V3, V4, V5, V6, V7, V8, V9))
+write.table(enh, file="repressedGene_enhancers_CNTL.bed", sep="\t", quote=F, row.names=F, col.names=F)
+
+genes <- read.csv("P3FTargets_repressed.csv", header = FALSE)
+enh <- read.delim("$workdir/ABC-results-DS-rerun3/P3F/Predictions/EnhancerPredictionsFull_threshold0.02_self_promoter.bedpe", header = FALSE)
+
+enh$V10 <- sapply(str_split(enh$V7,"_",),'[',1)
+enh$Overlap <- enh$V10 %in% genes$V1
+enh <- enh[enh$Overlap != "FALSE", ]
+enh <- subset(enh, select = c(V1, V2, V3, V4, V5, V6, V7, V8, V9))
+write.table(enh, file="repressedGene_enhancers_P3F.bed", sep="\t", quote=F, row.names=F, col.names=F)
+```
+## P3F bound repressed gene enhancers
+```{bash}
+cd $WORKDIR/chip/p3f/2mil_pcChIP/outputs/repressed/targets
+ml purge
+ml load GCC/10.3.0 \
+        BEDTools/2.30.0
+
+bedtools intersect \
+    -wa \
+    -u \
+    -a /home/gdkendalllab/lab/analyses/shared/P3F_at6hpf/p3f/peaks/pcP3F_diffBind.bed \
+    -b repressedGene_enhancers_P3F.bed \
+        > P3Fbound_repressedEnhancers.bed
+```
+## Heatmap of P3F bound repressed gene enhancers - Figure S9C
+```{bash}
+cd $WORKDIR
+module purge
+module load GCC/9.3.0 \
+            OpenMPI/4.0.3 \
+            deepTools/3.3.1-Python-3.8.2
+
+computeMatrix reference-point \
+  -S  chip/h3k27ac/pcChIP/outputs/bigwigs/Ctrl_avg_signal.bigWig \
+      chip/h3k27ac/pcChIP/outputs/bigwigs/P3F_avg_signal.bigWig \
+  -R  chip/p3f/2mil_pcChIP/outputs/repressed/targets/P3Fbound_repressedEnhancers.bed \
+  --referencePoint center \
+  -b 3000 \
+  -a 3000 \
+  -bs=1 \
+  -p=max \
+  --missingDataAsZero \
+  -o chip/p3f/2mil_pcChIP/outputs/repressed/heatmaps/P3Fbound_repressedEnhancers.matrix.gz
+plotHeatmap \
+      -m chip/p3f/2mil_pcChIP/outputs/repressed/heatmaps/P3Fbound_repressedEnhancers.matrix.gz \
+      -o chip/p3f/2mil_pcChIP/outputs/repressed/heatmaps/P3Fbound_repressedEnhancers.pdf \
+      --perGroup \
+      --samplesLabel cntl p3f \
+      --colorMap=BuGn
+```
+## Bin distances of enhancers to repressed genes - Figure S9G
+```{r}
+setwd("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/repressed/enhancerBin/")
+
+#PAX3::FOXO1
+df <- read.delim("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/repressed/repressedGene_enhancers_P3F.bed", header = FALSE)
+df <- df[df$V11 < 3000, ]
+write.table(df, file="repressedGene_enhancers_0-3kb_inP3F.bed", sep="\t", quote=F, row.names=F, col.names=F)
+
+df <- read.delim("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/repressed/repressedGene_enhancers_P3F.bed", header = FALSE)
+df <- df[df$V11 > 3000, ]
+df <- df[df$V11 < 10000, ]
+write.table(df, file="repressedGene_enhancers_3-10kb_inP3F.bed", sep="\t", quote=F, row.names=F, col.names=F)
+
+df <- read.delim("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/repressed/repressedGene_enhancers_P3F.bed", header = FALSE)
+df <- df[df$V11 > 10000, ]
+df <- df[df$V11 < 50000, ]
+write.table(df, file="repressedGene_enhancers_10-50kb_inP3F.bed", sep="\t", quote=F, row.names=F, col.names=F)
+
+df <- read.delim("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/repressed/repressedGene_enhancers_P3F.bed", header = FALSE)
+df <- df[df$V11 > 50000, ]
+write.table(df, file="repressedGene_enhancers_50pluskb_inP3F.bed", sep="\t", quote=F, row.names=F, col.names=F)
+
+#CNTL
+df <- read.delim("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/repressed/repressedGene_enhancers_CNTL.bed", header = FALSE)
+df <- df[df$V11 < 3000, ]
+write.table(df, file="repressedGene_enhancers_0-3kb_inCNTL.bed", sep="\t", quote=F, row.names=F, col.names=F)
+
+df <- read.delim("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/repressed/repressedGene_enhancers_CNTL.bed", header = FALSE)
+df <- df[df$V11 > 3000, ]
+df <- df[df$V11 < 10000, ]
+write.table(df, file="repressedGene_enhancers_3-10kb_inCNTL.bed", sep="\t", quote=F, row.names=F, col.names=F)
+
+df <- read.delim("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/repressed/repressedGene_enhancers_CNTL.bed", header = FALSE)
+df <- df[df$V11 > 10000, ]
+df <- df[df$V11 < 50000, ]
+write.table(df, file="repressedGene_enhancers_10-50kb_inCNTL.bed", sep="\t", quote=F, row.names=F, col.names=F)
+
+df <- read.delim("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/repressed/repressedGene_enhancers_CNTL.bed", header = FALSE)
+df <- df[df$V11 > 50000, ]
+write.table(df, file="repressedGene_enhancers_50pluskb_inCNTL.bed", sep="\t", quote=F, row.names=F, col.names=F)
+```
+## Heatmap of repressed gene enhancers by bin - Figure S9H
+```{bash}
+cd $WORKDIR
+module purge
+module load GCC/9.3.0 \
+            OpenMPI/4.0.3 \
+            deepTools/3.3.1-Python-3.8.2
+
+computeMatrix reference-point \
+  -S  chip/h3k27ac/pcChIP/outputs/bigwigs/Ctrl_avg_signal.bigWig \
+      chip/h3k27ac/pcChIP/outputs/bigwigs/P3F_avg_signal.bigWig \
+  -R  $WORKDIR/chip/p3f/2mil_pcChIP/outputs/repressed/enhancerBin/repressedGene_enhancers_0-3kb_inCNTL.bed \
+      $WORKDIR/chip/p3f/2mil_pcChIP/outputs/repressed/enhancerBin/repressedGene_enhancers_3-10kb_inCNTL.bed \
+      $WORKDIR/chip/p3f/2mil_pcChIP/outputs/repressed/enhancerBin/repressedGene_enhancers_10-50kb_inCNTL.bed \
+      $WORKDIR/chip/p3f/2mil_pcChIP/outputs/repressed/enhancerBin/repressedGene_enhancers_50pluskb_inCNTL.bed \
+      $WORKDIR/chip/p3f/2mil_pcChIP/outputs/repressed/enhancerBin/repressedGene_enhancers_0-3kb_inP3F.bed \
+      $WORKDIR/chip/p3f/2mil_pcChIP/outputs/repressed/enhancerBin/repressedGene_enhancers_3-10kb_inP3F.bed \
+      $WORKDIR/chip/p3f/2mil_pcChIP/outputs/repressed/enhancerBin/repressedGene_enhancers_10-50kb_inP3F.bed \
+      $WORKDIR/chip/p3f/2mil_pcChIP/outputs/repressed/enhancerBin/repressedGene_enhancers_50pluskb_inP3F.bed \
+  --referencePoint center \
+  -b 3000 \
+  -a 3000 \
+  -bs=1 \
+  -p=max \
+  --missingDataAsZero \
+  -o chip/p3f/2mil_pcChIPoutputs/repressed/enhancerBin/enhancerBIN.matrix.gz
+plotHeatmap \
+      -m chip/p3f/2mil_pcChIP/outputs/repressed/enhancerBin/enhancerBIN.matrix.gz \
+      -o chip/p3f/2mil_pcChIP/outputs/repressed/enhancerBin/enhancerBIN.pdf \
+      --perGroup \
+      --regionsLabel 0-3kb_CNTL 3-10kb_CNTL 10-50kb_CNTL 50kbplus_CNTL 0-3kb_P3F 3-10kb_P3F 10-50kb_P3F 50kbplus_P3F \
+      --samplesLabel cntl p3f \
+      --colorMap=BuGn
+```
+## Heatmap of repressed gene enhancers - Figure S9A
+```{bash}
+cd $WORKDIR
+module purge
+module load GCC/9.3.0 \
+            OpenMPI/4.0.3 \
+            deepTools/3.3.1-Python-3.8.2
+
+computeMatrix reference-point \
+  -S  chip/h3k27ac/pcChIP/outputs/bigwigs/Ctrl_avg_signal.bigWig \
+      chip/h3k27ac/pcChIP/outputs/bigwigs/P3F_avg_signal.bigWig \
+  -R  chip/p3f/2mil_pcChIP/outputs/repressed/targets/repressedGene_enhancers_CNTL.bed \
+  --referencePoint center \
+  -b 3000 \
+  -a 3000 \
+  -bs=1 \
+  -p=max \
+  --missingDataAsZero \
+  -o chip/p3f/2mil_pcChIP/outputs/repressed/heatmaps/enhancers_CNTL.matrix.gz
+plotHeatmap \
+      -m chip/p3f/2mil_pcChIP/outputs/repressed/heatmaps/enhancers_CNTL.matrix.gz \
+      -o chip/p3f/2mil_pcChIP/outputs/repressed/heatmaps/enhancers_CNTL.pdf \
+      --samplesLabel cntl p3f \
+      --perGroup \
+      --colorMap=BuGn
+```
+## activated enhancers and P3F binding
+```{r}
+library(clusterProfiler)
+library(tidyverse)
+
+setwd("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/activated")
+genes <- read.csv("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/targets/P3FTargets_activated.csv", header = FALSE)
+enh <- read.delim("$workdir/ABC-results-DS-rerun3/CTRL/Predictions/EnhancerPredictionsFull_threshold0.02_self_promoter.bedpe", header = FALSE)
+
+enh$V10 <- sapply(str_split(enh$V7,"_",),'[',1)
+enh$Overlap <- enh$V10 %in% genes$V1
+enh <- enh[enh$Overlap != "FALSE", ]
+enh <- subset(enh, select = c(V1, V2, V3, V4, V5, V6, V7, V8, V9))
+write.table(enh, file="activatedGene_enhancers_CNTL.bed", sep="\t", quote=F, row.names=F, col.names=F)
+
+genes <- read.csv("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/repressed/P3FTargets_activated.csv", header = FALSE)
+enh <- read.delim("$workdir/ABC-results-DS-rerun3/P3F/Predictions/EnhancerPredictionsFull_threshold0.02_self_promoter.bedpe", header = FALSE)
+
+enh$V10 <- sapply(str_split(enh$V7,"_",),'[',1)
+enh$Overlap <- enh$V10 %in% genes$V1
+enh <- enh[enh$Overlap != "FALSE", ]
+enh <- subset(enh, select = c(V1, V2, V3, V4, V5, V6, V7, V8, V9))
+write.table(enh, file="activatedGene_enhancers_P3F.bed", sep="\t", quote=F, row.names=F, col.names=F)
+```
+```{bash}
+cd $WORKDIR/chip/p3f/2mil_pcChIP/outputs/activated
+ml purge
+ml load GCC/10.3.0 \
+        BEDTools/2.30.0
+bedtools intersect \
+    -wa \
+    -u \
+    -a activatedGene_enhancers_P3F.bed \
+    -b activatedGene_enhancers_CNTL.bed \
+        > activatedGene_enhancers_Overlap.bed
+
+bedtools intersect \
+    -wa \
+    -u \
+    -a activatedGene_enhancers_P3F.bed \
+    -b /gpfs0/home1/gdkendalllab/lab/analyses/shared/P3F_at6hpf/p3f/peaks/pcP3F_diffBind.bed \
+        > activatedGene_enhancers_withP3Fbinding.bed
+```
+## Activate enhancers initial accessibility
+```{bash}
+cd $WORKDIR/chip/p3f/2mil_pcChIP/outputs/activated/stratified
+ml purge
+ml load GCC/10.3.0 \
+        BEDTools/2.30.0
+
+bedtools subtract \
+    -A \
+    -a ../activatedGene_enhancers_withP3Fbinding.bed \
+    -b $WORKDIR/atac/outputs/timecourse_atac/kucinski_p3f_noATAC_cntl.bed \
+        > activatedGene_enhancers_withP3Fbinding_initiallyOpen.bed
+
+bedtools subtract \
+    -A \
+    -a ../activatedGene_enhancers_withP3Fbinding.bed \
+    -b activatedGene_enhancers_withP3Fbinding_initiallyOpen.bed \
+        > activatedGene_enhancers_withP3Fbinding_initiallyClosed.bed
+```
+## Active enhancers stratified by accessibility - Figure S10A
+```{r}
+library(clusterProfiler)
+library(tidyverse)
+setwd("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/activated/stratified")
+
+genes <- read.csv("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/targets/P3FTargets_activated.csv", header = FALSE)
+enh <- read.delim("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/activated/stratified/activatedGene_enhancers_withP3Fbinding_initiallyOpen.bed", header = FALSE)
+enh$V10 <- sapply(str_split(enh$V7,"_",),'[',1)
+enh$Overlap <- enh$V10 %in% genes$V1
+enh <- enh[enh$Overlap != "FALSE", ]
+enh_unique <- enh[!duplicated(enh$V10), ]
+enh_unique <- subset(enh_unique, select = c(V10))
+write.csv(enh_unique, file="P3F-activatedGenes_initiallyOpen.csv")
+
+genes <- read.csv("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/targets/P3FTargets_activated.csv", header = FALSE)
+enh <- read.delim("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/activated/stratified/activatedGene_enhancers_withP3Fbinding_initiallyClosed.bed", header = FALSE)
+enh$V10 <- sapply(str_split(enh$V7,"_",),'[',1)
+enh$Overlap <- enh$V10 %in% genes$V1
+enh <- enh[enh$Overlap != "FALSE", ]
+enh_unique <- enh[!duplicated(enh$V10), ]
+enh_unique <- subset(enh_unique, select = c(V10))
+write.csv(enh_unique, file="P3F-activatedGenes_initiallyClosed.csv")
+```
+## Finding P3F Target Orthologs - Figure S10A
+```{r}
+library(orthogene)
+library(org.Dr.eg.db)
+library("org.Hs.eg.db")
+OrgDb="org.Dr.eg.db"
+human="org.Hs.eg.db"
+setwd("$WORKDIR/rnaseq/patient_rnaseq/")
+
+targets <- read.csv("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/targets/P3FTargets_activated.csv", header = FALSE)
+
+ids<-bitr(targets$V1, fromType = "SYMBOL", toType = "ENSEMBL", OrgDb=OrgDb)
+targets <- ids$ENSEMBL
+gene_df <- convert_orthologs(   gene_df = targets,
+                                gene_input = "rownames",
+                                gene_output = "dict",
+                                input_species = "Danio rerio",
+                                output_species = "human",
+                                non121_strategy = "keep_both_species",
+                                method = "gprofiler",
+                                as_sparse=TRUE)
+write.csv(gene_df, "P3FTargets_orthologs.csv")
+gene_df <- read.csv("P3FTargets_orthologs.csv")
+```
+## Heatmap of activated P3F-enhancers - Figure 7C
+```{bash}
+cd $WORKDIR
+set -e
+module purge
+module load GCC/9.3.0 \
+            OpenMPI/4.0.3 \
+            deepTools/3.3.1-Python-3.8.2
+
+computeMatrix reference-point \
+  -S  chip/h3k27ac/pcChIP/outputs/bigwigs/Ctrl_avg_signal.bigWig \
+      chip/h3k27ac/pcChIP/outputs/bigwigs/P3F_avg_signal.bigWig \
+  -R  chip/p3f/2mil_pcChIP/outputs/activated/stratified/activatedGene_enhancers_withP3Fbinding_initiallyClosed.bed \
+      chip/p3f/2mil_pcChIP/outputs/activated/stratified/activatedGene_enhancers_withP3Fbinding_initiallyOpen.bed \
+  --referencePoint center \
+  -b 3000 \
+  -a 3000 \
+  -bs=1 \
+  -p=max \
+  --missingDataAsZero \
+  -o chip/p3f/2mil_pcChIP/outputs/activated/stratified/P3F_enhancersStratified_H3K27ac.matrix.gz
+plotHeatmap \
+      -m chip/p3f/2mil_pcChIP/outputs/activated/stratified/P3F_enhancersStratified_H3K27ac.matrix.gz \
+      -o chip/p3f/2mil_pcChIP/outputs/activated/stratified/P3F_enhancersStratified_H3K27ac.pdf \
+    --regionsLabel initiallyClosed initiallyOpen\
+      --samplesLabel cntl p3f \
+      --colorMap=BuGn
+
+computeMatrix reference-point \
+  -S  atac/outputs/bigwigs/cntl.atac_average.bigwig \
+      atac/outputs/bigwigs/p3f.atac_average.bigwig \
+  -R  chip/p3f/2mil_pcChIP/outputs/activated/stratified/activatedGene_enhancers_withP3Fbinding_initiallyClosed.bed \
+      chip/p3f/2mil_pcChIP/outputs/activated/stratified/activatedGene_enhancers_withP3Fbinding_initiallyOpen.bed \
+  --referencePoint center \
+  -b 3000 \
+  -a 3000 \
+  -bs=1 \
+  -p=max \
+  --missingDataAsZero \
+  -o chip/p3f/2mil_pcChIP/outputs/activated/stratified/P3F_enhancersStratified_atac.matrix.gz
+plotHeatmap \
+      -m chip/p3f/2mil_pcChIP/outputs/activated/stratified/P3F_enhancersStratified_atac.matrix.gz \
+      -o chip/p3f/2mil_pcChIP/outputs/activated/stratified/P3F_enhancersStratified_atac.pdf \
+    --regionsLabel initiallyClosed initiallyOpen\
+      --samplesLabel cntl p3f \
+      --colorMap=Blues
+```
+#### Genes regulated - Figure S10G-H
+```{bash}
+cd $WORKDIR/chip/p3f/2mil_pcChIP/outputs/activated/stratified
+ml purge
+ml load GCC/10.3.0 \
+        BEDTools/2.30.0
+
+bedtools intersect \
+    -wa \
+    -a activatedGene_enhancers_withP3Fbinding_initiallyOpen.bed \
+    -b $workdir/ABC-results-DS-rerun3/CTRL/Predictions/EnhancerPredictionsFull_threshold0.02_self_promoter.bedpe \
+        > activatedGene_enhancers_withP3Fbinding_initiallyOpen_inCNTL.bed
+
+bedtools intersect \
+    -wa \
+    -a activatedGene_enhancers_withP3Fbinding_initiallyOpen.bed \
+    -b $workdir/ABC-results-DS-rerun3/P3F/Predictions/EnhancerPredictionsFull_threshold0.02_self_promoter.bedpe \
+        > activatedGene_enhancers_withP3Fbinding_initiallyOpen_inP3F.bed
+```
+```{r}
+library(clusterProfiler)
+library(tidyverse)
+setwd("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/activated/stratified")
+
+enh <- read.delim("activatedGene_enhancers_withP3Fbinding_initiallyOpen_inCNTL.bed", header = FALSE)
+enh$V10 <- sapply(str_split(enh$V7,"_",),'[',1)
+enh_unique <- enh[!duplicated(enh$V10), ]
+enh_unique <- subset(enh_unique, select = c(V10))
+write.csv(enh_unique, file="activatedGene_enhancers_withP3Fbinding_initiallyOpen_inCNTL.csv")
+
+enh <- read.delim("activatedGene_enhancers_withP3Fbinding_initiallyOpen_inP3F.bed", header = FALSE)
+enh$V10 <- sapply(str_split(enh$V7,"_",),'[',1)
+enh_unique <- enh[!duplicated(enh$V10), ]
+enh_unique <- subset(enh_unique, select = c(V10))
+write.csv(enh_unique, file="activatedGene_enhancers_withP3Fbinding_initiallyOpen_inP3F.csv")
+# ran genes through Venny for overlap and then DAVID for pathways 
+```
+## Get promoters of activated P3F genes
+```{r}
+cd $WORKDIR/chip/p3f/2mil_pcChIP/outputs/activated
+# run gene list through ucsc browser and get regions 1 bp upstream of genes
+ml purge
+ml load GCC/10.3.0 \
+        BEDTools/2.30.0
+bedtools slop \
+    -b 500 \
+    -i hgTables.bed \ # this is the resulting file
+    -g danRer11.fa.fai \
+        > P3F_activatedTargets_1kb.bed
+```
+## Expression of P3F Targets in zebrafish - Figure S10F
+```{r}
+library(tidyverse)
+library(clusterProfiler)
+library(org.Dr.eg.db)
+OrgDb="org.Dr.eg.db"
+setwd("$WORKDIR/chip/yue_brainMuscle/rna")
+
+rna <- read.delim("Yue_RNAseq_brain.TPM.txt") # obtained from GEO
+targets <- read.csv("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/targets/P3FTargets_activated.csv", header = FALSE)
+
+genes <- rna$gene_id
+ids <- bitr(genes, fromType = "ENSEMBL", toType = "SYMBOL", OrgDb=OrgDb)
+ids$bitr = ids$SYMBOL %in% targets$V1
+ids <- ids[ids$bitr != "FALSE", ]
+df2 <- rna[rna$gene_id %in% ids$ENSEMBL,]
+write.csv(df2, "P3FTargets_brainRNA_yue.csv")
+
+rna <- read.delim("$WORKDIR/chip/yue_brainMuscle/rna/Yue_RNAseq_muscle.TPM.txt")
+targets <- read.csv("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/targets/P3FTargets_activated.csv", header = FALSE)
+genes <- rna$gene_id
+ids <- bitr(genes, fromType = "ENSEMBL", toType = "SYMBOL", OrgDb=OrgDb)
+ids$bitr = ids$SYMBOL %in% targets$V1
+ids <- ids[ids$bitr != "FALSE", ]
+df2 <- rna[rna$gene_id %in% ids$ENSEMBL,]
+write.csv(df2, "P3FTargets_muscleRNA_yue.csv")
+
+# write data into new CSV stacked for plotting
+df <- read.csv("P3FTargets_yueCombined.csv")
+pdf("P3FTargets_expression_yue.pdf")
+ggplot(df, aes(x=as.factor(type), y=tpm)) + 
+    geom_barplot(alpha=0.4) + 
+    theme_classic() +
+    xlab("type") +
+    ylab ("TPM")
+dev.off()
+```
+## ENCODE pipeline
+```{bash}
+# fastq files were downloaded and run through the encode histone chip-seq pipeline for H3K27ac
+# fastq files were downloaded and run through the encode atac-seq pipeline for ATAC
+# the brain and muscle samples were taken
+# outputs were stored in chip/yue_brainMuscle/h3k27ac/encode_outputs/
+# these were run through the activity by contact model
+```
+## Getting enhancers of PAX3::FOXO1 targets in brain and muscles
+```{r}
+library(tidyverse)
+library(stringr)
+library(clusterProfiler)
+library(org.Dr.eg.db)
+OrgDb="org.Dr.eg.db"
+setwd("$WORKDIR/chip/yue_brainMuscle/h3k27ac/outputs/abc_enhancers")
+
+brainEnh <- read.delim("$workdir/ABC-results-brain-muscle/brain/Predictions/EnhancerPredictionsFull_threshold0.02_self_promoter.bedpe", header = FALSE)
+muscleEnh <- read.delim("$workdir/ABC-results-brain-muscle/muscle/Predictions/EnhancerPredictionsFull_threshold0.02_self_promoter.bedpe", header = FALSE)
+targets <- read.csv("$WORKDIR/chip/p3f/2mil_pcChIP/outputs/targets/P3FTargets_activated.csv", header = FALSE)
+
+brainEnh$gene <- sapply(str_split(brainEnh$V7,"_",),'[',1)
+brainEnh$overlap <- brainEnh$gene %in% targets$V1
+brainEnh <- brainEnh[brainEnh$overlap != "FALSE", ]
+brainEnh <- subset(brainEnh, select = c(V1, V2, V3))
+write.table(brainEnh, "P3FTargets_brainEnhancers.bed", sep="\t", quote=F, row.names=F, col.names=F)
+
+muscleEnh$gene <- sapply(str_split(muscleEnh$V7,"_",),'[',1)
+muscleEnh$overlap <- muscleEnh$gene %in% targets$V1
+muscleEnh <- muscleEnh[muscleEnh$overlap != "FALSE", ]
+muscleEnh <- subset(muscleEnh, select = c(V1, V2, V3))
+write.table(muscleEnh, "P3FTargets_muscleEnhancers.bed", sep="\t", quote=F, row.names=F, col.names=F)
+```
+```{bash}
+cd $WORKDIR/chip/yue_brainMuscle/h3k27ac/outputs/abc_enhancers
+ml purge
+ml load GCC/10.3.0 \
+        BEDTools/2.30.0
+bedtools intersect \
+    -wa \
+    -u \
+    -a P3FTargets_muscleEnhancers.bed \
+    -b P3FTargets_brainEnhancers.bed \
+        > brain-muscle_enhancersOverlap.bed
+
+bedtools subtract \
+    -A \
+    -a P3FTargets_muscleEnhancers.bed \
+    -b P3FTargets_brainEnhancers.bed \
+        > muscleUnique_enhancers.bed
+
+bedtools subtract \
+    -A \
+    -a P3FTargets_brainEnhancers.bed \
+    -b P3FTargets_muscleEnhancers.bed \
+        > brainUnique_enhancers.bed
+```
+## ATAC-seq at P3F targets promoters - Figure S10B
+```{bash}
+cd $WORKDIR
+module purge
+module load GCC/9.3.0 \
+            OpenMPI/4.0.3 \
+            deepTools/3.3.1-Python-3.8.2
+computeMatrix reference-point \
+  -S  /home/gdkendalllab/lab/analyses/rsjxk002/P3F_at6hpf_jack/chip/yue_brainMuscle/atac/encode_outputs/muscle/signal/pooled-rep/rep.pooled.fc.signal.bigwig \
+      /home/gdkendalllab/lab/analyses/rsjxk002/P3F_at6hpf_jack/chip/yue_brainMuscle/atac/encode_outputs/brain/signal/pooled-rep/rep.pooled.fc.signal.bigwig \
+  -R /chip/p3f/2mil_pcChIP/outputs/activated/P3F_activatedTargets_1kb.bed \
+  --referencePoint center \
+  -b 3000 \
+  -a 3000 \
+  -bs=1 \
+  -p=max \
+  --missingDataAsZero \
+  -o chip/yue_brainMuscle/atac/outputs/heatmaps/atac.activatedP3FTargets.matrix.gz
+plotHeatmap \
+      -m chip/yue_brainMuscle/atac/outputs/heatmaps/atac.activatedP3FTargets.matrix.gz \
+      -o chip/yue_brainMuscle/atac/outputs/heatmaps/atac.activatedP3FTargets.pdf \
+      --kmeans 2 \
+      --samplesLabel muscle brain \
+      --colorMap=Blues
+```
+## Heatmaps and shared msucle/brain enhancers - Figure S10D
+```{bash}
+set -e
+module purge
+module load GCC/9.3.0 \
+            OpenMPI/4.0.3 \
+            deepTools/3.3.1-Python-3.8.2
+
+computeMatrix reference-point \
+  -S chip/yue_brainMuscle/h3k27ac/encode_outputs/muscle/signal/pooled-rep/rep.pooled_x_ctl.pooled.fc.signal.bigwig \
+      chip/yue_brainMuscle/h3k27ac/encode_outputs/brain/signal/pooled-rep/rep.pooled_x_ctl.pooled.fc.signal.bigwig \
+  -R  chip/yue_brainMuscle/h3k27ac/outputs/abc_enhancers/brain-muscle_enhancersOverlap.bed \
+  --referencePoint center \
+  -b 3000 \
+  -a 3000 \
+  -bs=1 \
+  -p=max \
+  --missingDataAsZero \
+  -o chip/yue_brainMuscleh3k27ac/outputs/abc_enhancers/h3k27ac.activatedP3FTargets_enhancers_shared.matrix.gz
+plotHeatmap \
+      -m chip/yue_brainMuscleh3k27ac/outputs/abc_enhancers/h3k27ac.activatedP3FTargets_enhancers_shared.matrix.gz \
+      -o chip/yue_brainMuscleh3k27ac/outputs/abc_enhancers/h3k27ac.activatedP3FTargets_enhancers_shared.pdf \
+      --perGroup \
+      --samplesLabel muscle brain \
+      --colorMap=BuGn
+
+computeMatrix reference-point \
+  -S chip/yue_brainMuscle/atac/encode_outputs/muscle/signal/pooled-rep/rep.pooled.fc.signal.bigwig \
+      chip/yue_brainMuscle/atac/encode_outputs/brain/signal/pooled-rep/rep.pooled.fc.signal.bigwig \
+  -R  chip/yue_brainMuscle/h3k27ac/outputs/abc_enhancers/brain-muscle_enhancersOverlap.bed \
+  --referencePoint center \
+  -b 3000 \
+  -a 3000 \
+  -bs=1 \
+  -p=max \
+  --missingDataAsZero \
+  -o chip/yue_brainMuscleatac/outputs/heatmaps/atac.activatedP3FTargets_enhancers-shared.matrix.gz
+plotHeatmap \
+      -m chip/yue_brainMuscleatac/outputs/heatmaps/atac.activatedP3FTargets_enhancers-shared.matrix.gz \
+      -o chip/yue_brainMuscleatac/outputs/heatmaps/atac.activatedP3FTargets_enhancers-shared.pdf \
+      --perGroup \
+      --samplesLabel muscle brain \
+      --colorMap=Blues
+```
+## Heatmaps and unqiue muscle/brain enhancers - Figure S10E
+```{bash}
+set -e
+module purge
+module load GCC/9.3.0 \
+            OpenMPI/4.0.3 \
+            deepTools/3.3.1-Python-3.8.2
+
+computeMatrix reference-point \
+  -S chip/yue_brainMuscle/h3k27ac/encode_outputs/muscle/signal/pooled-rep/rep.pooled_x_ctl.pooled.fc.signal.bigwig \
+      chip/yue_brainMuscle/h3k27ac/encode_outputs/brain/signal/pooled-rep/rep.pooled_x_ctl.pooled.fc.signal.bigwig \
+  -R  chip/yue_brainMuscle/h3k27ac/outputs/abc_enhancers/muscleUnique_enhancers.bed \
+      chip/yue_brainMuscle/h3k27ac/outputs/abc_enhancers/brainUnique_enhancers.bed \
+  --referencePoint center \
+  -b 3000 \
+  -a 3000 \
+  -bs=1 \
+  -p=max \
+  --missingDataAsZero \
+  -o chip/yue_brainMuscle/h3k27ac/outputs/abc_enhancers/h3k27ac.activatedP3FTargets_enhancers.matrix.gz
+plotHeatmap \
+      -m chip/yue_brainMuscle/h3k27ac/outputs/abc_enhancers/h3k27ac.activatedP3FTargets_enhancers.matrix.gz \
+      -o chip/yue_brainMuscle/h3k27ac/outputs/abc_enhancers/h3k27ac.activatedP3FTargets_enhancers.pdf \
+      --regionsLabel muscle_enhancers brain_enhancers \
+      --samplesLabel muscle brain \
+      --colorMap=BuGn
+
+computeMatrix reference-point \
+  -S chip/yue_brainMuscle/atac/encode_outputs/muscle/signal/pooled-rep/rep.pooled.fc.signal.bigwig \
+      chip/yue_brainMuscle/atac/encode_outputs/brain/signal/pooled-rep/rep.pooled.fc.signal.bigwig \
+  -R  chip/yue_brainMuscle/h3k27ac/outputs/abc_enhancers/muscleUnique_enhancers.bed \
+      chip/yue_brainMuscle/h3k27ac/outputs/abc_enhancers/brainUnique_enhancers.bed \
+  --referencePoint center \
+  -b 3000 \
+  -a 3000 \
+  -bs=1 \
+  -p=max \
+  --missingDataAsZero \
+  -o chip/yue_brainMuscle/atac/outputs/heatmaps/atac.activatedP3FTargets_enhancers.matrix.gz
+plotHeatmap \
+      -m chip/yue_brainMuscle/atac/outputs/heatmaps/atac.activatedP3FTargets_enhancers.matrix.gz \
+      -o chip/yue_brainMuscle/atac/outputs/heatmaps/atac.activatedP3FTargets_enhancers.pdf \
+      --regionsLabel muscle_enhancers brain_enhancers \
+      --samplesLabel muscle brain \
+      --colorMap=Blues
+```
+## Patient RNA-seq for P3F and skeletal muscle - Figure 7H
+```{r}
+library(DESeq2)
+library(clusterProfiler)
+library(msigdbr)
+library(pheatmap)
+setwd("$WORKDIR/rnaseq/patient_rnaseq/toSkeletal/")
+
+# RNA-seq Differential Expression
+data <- read.delim("../GSE108022_counts_matrix.txt", row.names = 1) # from GEO
+meta <- read.delim("../GSE108022_metadata.txt", row.names = 1)
+meta <- meta[rownames(meta) %in% c("RMS049", "RMS057", "RMS061", "RMS2038", "RMS2039", "RMS2071", "RMS2072", "RMS2076", "RMS2079", 
+                                        "RMS209", "RMS209.1", "RMS2093", "RMS2103", "RMS2104", "RMS2105", "RMS2114", "RMS224", "RMS225", 
+                                        "RMS227", "RMS232", "RMS238", "RMS246", "RMS247", "RMS248", "NS127muscle", "NS128muscle", "NS129muscle", "NS132muscle", "NS134muscle"), , drop = FALSE]
+data <- data[, colnames(data) %in% rownames(meta), drop = FALSE]
+all(colnames(data) %in% rownames(meta))
+all(colnames(data) == rownames(meta))
+dds <- DESeqDataSetFromMatrix(countData = data, colData = meta, design = ~ fusion_status)
+dds <- estimateSizeFactors(dds)
+normalized_counts <- counts(dds, normalized=TRUE)
+write.table(normalized_counts, file="GSE108022_normalizedCounts-P3FvSk.txt", sep="\t", quote=F, col.names=NA)
+dds <- DESeq(dds)
+res <- results(dds, name = "fusion_status_PAX3.FOXO1_vs_Normal")
+res_df <- as.data.frame(res)
+write.csv(res_df, "GSE108022_P3FvSk_deseq2_results.csv", row.names = TRUE)
+
+genes <- read.csv("../P3FTargets_orthologs.csv")
+human <- read.delim("GSE108022_normalizedCounts-P3FvSk.txt")
+human$ZebrafishTargets <- human$X %in% genes$x
+human <- human[human$ZebrafishTargets != "FALSE", ]
+write.csv(human, "GSE108022_normalizedCounts-P3FvSk.csv")
+
+genes <- read.csv("../P3FTargets_orthologs.csv")
+deseq <- read.csv("GSE108022_P3FvSk_deseq2_results.csv")
+deseq$ZebrafishTargets <- deseq$X %in% genes$x
+deseq <- deseq[deseq$ZebrafishTargets != "FALSE", ]
+write.csv(deseq, "GSE108022_P3FvSk_deseq2_results_ZFTargets.csv")
+
+# GSEA analysis
+targets <- read.csv("../P3FTargets_orthologs_forGSEA.csv") # re-formatted for analysis
+de <- read.csv("GSE108022_P3FvSk_deseq2_results.csv")
+geneList <- de$log2FoldChange
+names(geneList) <- de$X
+geneList <- sort(geneList, decreasing = TRUE)
+gse <- GSEA(geneList, TERM2GENE = targets, nPermSimple = 10000, maxGSSize = 2000)
+write.csv(gse, "P3FTargets_P3FvSk_GSEA.csv")
+pdf("P3FTargets_P3FvSk_GSEA.pdf")
+gseaplot(gse, title = gse$Description[1], geneSetID = 1)
+dev.off()
+gse_genes <- gse$core_enrichment
+gse_genes <- unlist(strsplit(gse_genes, "/"))
+write.csv(gse_genes, "P3FTargets_P3FvSk_GSEA_genes.csv")
+
+# Pathway analysis
+set.seed(4512)
+P3FTargets <- read.csv("P3FTargets_P3FvSk_GSEA_genes.csv")
+P3FTargets <- P3FTargets$x
+geneset = msigdbr(species = "Homo sapiens", category = "C2", subcategory = "CGP")
+geneSet = subset(geneset, select = c(gs_name, gene_symbol))
+enricher <- enricher(P3FTargets, TERM2GENE = geneSet)
+write.csv(enricher, "P3FTargets_P3FvSk_curatedPathways.csv")
+geneset = msigdbr(species = "Homo sapiens", category = "C5", subcategory = "GO:BP")
+geneSet = subset(geneset, select = c(gs_name, gene_symbol))
+enricher <- enricher(P3FTargets, TERM2GENE = geneSet)
+write.csv(enricher, "P3FTargets_P3FvSk_FPRMS_GOBP.csv")
+
+P3FTargets <- read.csv("P3FTargets_P3FvSk_GSEA_genes.csv")
+rna <- read.csv("../GSE108022_normalizedCounts_zebrafishTargets_annotated.csv")
+rna$GSEATargets <- rna$X %in% P3FTargets$x
+rna <- rna[rna$GSEATargets != "FALSE", ]
+write.csv(rna, "GSE108022_normalizedCounts_zebrafishTargets_GSEA.csv")
+
+P3FTargets <- read.csv("P3FTargets_P3FvSk_GSEA_genes.csv")
+de <- read.csv("GSE108022_P3FvSk_deseq2_results.csv")
+de$GSEATargets <- de$X %in% P3FTargets$x
+de <- de[de$GSEATargets != "FALSE", ]
+write.csv(de, "GSE108022_DESeq2results_P3FvSk_zebrafishTargets_GSEA.csv")
+```
+## GSEA of initial closed genes
+```{r}
+library(clusterProfiler)
+library(orthogene)
+library(org.Dr.eg.db)
+library("org.Hs.eg.db")
+OrgDb="org.Dr.eg.db"
+human="org.Hs.eg.db"
+setwd("$WORKDIR/rnaseq/patient_rnaseq/toSkeletal/")
+
+targets <- read.csv("P3F-activatedGenes_initiallyClosed.csv")
+ids<-bitr(targets$V1, fromType = "SYMBOL", toType = "ENSEMBL", OrgDb=OrgDb)
+targets <- ids$ENSEMBL
+gene_df <- convert_orthologs(   gene_df = targets,
+                                gene_input = "rownames",
+                                gene_output = "dict",
+                                input_species = "Danio rerio",
+                                output_species = "human",
+                                non121_strategy = "keep_both_species",
+                                method = "gprofiler",
+                                as_sparse=TRUE)
+write.csv(gene_df, "../P3F-activatedGenes_initiallyClosed_orthologs.csv")
+
+targets <- read.csv("./P3F-activatedGenes_initiallyClosed_orthologs.csv") # re-formatted for analysis
+de <- read.csv("GSE108022_P3FvSk_deseq2_results.csv")
+geneList <- de$log2FoldChange
+names(geneList) <- de$X
+geneList <- sort(geneList, decreasing = TRUE)
+gse <- GSEA(geneList, TERM2GENE = targets, nPermSimple = 10000, maxGSSize = 2000)
+write.csv(gse, "initiallyClosed-P3FTargets_P3FvSk_GSEA.csv")
+pdf("initiallyClosed-P3FTargets_P3FvSk_GSEA.pdf")
+gseaplot(gse, title = gse$Description[1], geneSetID = 1)
+dev.off()
+gse_genes <- gse$core_enrichment
+gse_genes <- unlist(strsplit(gse_genes, "/"))
+write.csv(gse_genes, "initiallyClosed-P3FTargets_P3FvSk_GSEA_genes.csv")
+```
+## RNA-seq across xenografts - Figure 7I
+```{r}
+library(DESeq2)
+setwd("$WORKDIR/rnaseq/patient_rnaseq/pediatric_cancer_xenografts/")
+genes <- read.csv("$WORKDIR/rnaseq/patient_rnaseq/toSkeletal/P3FTargets_P3FvSk_GSEA_genes.csv")
+normalized_counts <- normalized_counts[rownames(normalized_counts) %in% genes$x, ]
+write.table(normalized_counts, file="normalizedCounts_P3FTargets_GSEA.txt", sep="\t", quote=F, col.names=NA)
+## edit the csv file to look at expression across xenografts
+```
+## Overlap with chromatin accessibilty - Figure 6D
+```{bash}
+cd chip/p3f/homeobox_pcChIP/outputs/peaks/accessibility
+ml purge
+ml load GCC/10.3.0 \
+        BEDTools/2.30.0
+
+bedtools subtract \
+    -A \
+    -a $WORKDIR/chip/p3f/homeobox_pcChIP/outputs/peaks/P3FHD_dsALL.diffBind.bed \
+    -b $workdir/encode_atac_ctrl/peak/overlap_reproducibility/overlap.optimal_peak.narrowPeak \
+        > P3FHD_dsALL.diffBind_noATAC.bed
+
+bedtools subtract \
+    -A \
+    -a $WORKDIR/chip/p3f/homeobox_pcChIP/outputs/peaks/P3FHD_dsALL.diffBind.bed \
+    -b P3FHD_dsALL.diffBind_noATAC.bed \
+        > P3FHD_dsALL.diffBind_ATAC.bed
+
+bedtools subtract \
+    -A \
+    -a $WORKDIR/chip/p3f/homeobox_pcChIP/outputs/peaks/PAX3FOXO1_dsALL.diffBind.bed \
+    -b $workdir/encode_atac_ctrl/peak/overlap_reproducibility/overlap.optimal_peak.narrowPeak \
+        > PAX3FOXO1_dsALL.diffBind_noATAC.narrowPeak
+```
+## Heatmaps of binding to closed chromatin - Figure S7H
+```{bash}
+module purge
+module load GCC/9.3.0 \
+            OpenMPI/4.0.3 \
+            deepTools/3.3.1-Python-3.8.2
+
+computeMatrix reference-point \
+  -S  chip/p3f/homeobox_pcChIP/outputs/bigwigs/cntl.dsALL_average.bigwig \
+      chip/p3f/homeobox_pcChIP/outputs/bigwigs/p3f.dsALL_average.bigwig \
+      chip/p3f/homeobox_pcChIP/outputs/bigwigs/p3f-hd.dsALL_average.bigwig \
+  -R    chip/p3f/homeobox_pcChIP/outputs/peaks/accessibility/PAX3FOXO1_dsALL.diffBind_noATAC.narrowPeak \
+        chip/p3f/homeobox_pcChIP/outputs/peaks/accessibility/P3FHD_dsALL.diffBind_noATAC.bed \
+  --referencePoint center \
+  -b 3000 \
+  -a 3000 \
+  -bs=1 \
+  -p=max \
+  --missingDataAsZero \
+  -o chip/p3f/homeobox_pcChIP/outputs/heatmaps/P3FHD_inaccessibleBinding_chip.matrix.gz
+plotHeatmap \
+      -m chip/p3f/homeobox_pcChIP/outputs/heatmaps/P3FHD_inaccessibleBinding_chip.matrix.gz \
+      -o chip/p3f/homeobox_pcChIP/outputs/heatmaps/P3FHD_inaccessibleBinding_chip.pdf \
+      --regionsLabel p3f_noATAC hd_noATAC \
+      --samplesLabel cntl p3f p3f-hd \
+      --colorMap=Purples
+```
+## Genes regulated by shared mutant binding sites - Figure 6K
+```{bash}
+cd $WORKDIR/chip/p3f/homeobox_pcChIP/outputs/annotation/
+ml purge
+ml load GCC/10.3.0 \
+        BEDTools/2.30.0
+
+bedtools intersect \
+  -wa \
+  -u \
+  -a $workdir/ABC-results-DS-rerun3/P3F/Predictions/EnhancerPredictionsFull_threshold0.02_self_promoter.bedpe \
+  -b $WORKDIR/chip/p3f/homeobox_pcChIP/outputs/peaks/PAX3FOXO1-P3FHD_shared.bed \
+        > ABCEnhancers_PAX3FOXO1-P3FHD_shared.bedpe
+```
+```{r}
+setwd("$WORKDIR/chip/p3f/homeobox_pcChIP/outputs/annotation/")
+enh <- read.delim("ABCEnhancers_PAX3FOXO1-P3FHD_shared.bedpe", header = FALSE)
+enh$V10 <- sapply(str_split(enh$V7,"_",),'[',1)
+enh_unique <- enh[!duplicated(enh$V10), ]
+enh_unique <- subset(enh_unique, select = c(V10))
+write.csv(enh_unique, file="ABCEnhancers_PAX3FOXO1-P3FHD_shared.csv")
+up <- read.delim("$WORKDIR/rnaseq/cennypipeline/outputs/diff_analysis_rslt/tables/P3FvsCNTL.up_FDR1.5.txt")
+shared <- enh_unique %>% filter(V10 %in% up$Id)
+write.csv(shared, file="ABCEnhancers_PAX3FOXO1-P3FHD_shared_upregulated.csv")
+```
+## Heatmaps of bound motifs - Figure 6F
+```{bash}
+cd $WORKDIR
+module purge
+module load GCC/9.3.0 \
+            OpenMPI/4.0.3 \
+            deepTools/3.3.1-Python-3.8.2
+
+computeMatrix reference-point \
+  -S  atac/outputs/bigwigs/cntl.atac_average.bigwig \
+  -R    chip/p3f/homeobox_pcChIP/outputs/peaks/motifs/homeoboxMotif_PAX3FOXO1-bound.bed \
+        chip/p3f/homeobox_pcChIP/outputs/peaks/motifs/pairedMotif_P3FHD-bound.bed \
+  --referencePoint center \
+  -b 3000 \
+  -a 3000 \
+  -bs=1 \
+  -p=max \
+  --missingDataAsZero \
+  -o chip/p3f/homeobox_pcChIP/outputs/heatmaps/accessibility-ofMotifs.matrix.gz
+plotHeatmap \
+      -m chip/p3f/homeobox_pcChIP/outputs/heatmaps/accessibility-ofMotifs.matrix.gz \
+      -o chip/p3f/homeobox_pcChIP/outputs/heatmaps/accessibility-ofMotifs.pdf \
+      --regionsLabel p3f_sites_homeobox hd_sites_paired \
+      --samplesLabel cntl \
+      --colorMap=Blues
+```

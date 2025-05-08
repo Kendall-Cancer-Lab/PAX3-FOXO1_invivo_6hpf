@@ -1,0 +1,14 @@
+#!/bin/bash
+
+#SBATCH --job-name=run_abc_enhancer2
+
+#SBATCH --partition=general
+
+#SBATCH --output=run_abc_enhancer2_%j.out
+
+. /gpfs0/home/gdtheisenlab/cxt050/opt/miniconda3/etc/profile.d/conda.sh
+cd ~/opt/ABC-Enhancer-Gene-Prediction_2/ABC-Enhancer-Gene-Prediction
+conda activate /home/gdtheisenlab/cxt050/opt/miniconda3/envs/mamba_env/envs/abc-env
+set -x
+snakemake -n -p
+snakemake -j1
