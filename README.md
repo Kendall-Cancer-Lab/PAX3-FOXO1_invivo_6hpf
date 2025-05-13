@@ -13,3 +13,5 @@ The code is split across 4 rmd files
 4) P3F_chromseq.rmd - Analysis that requires multiple datasets to have been generated
 
 If you have questions on the study or code, please get in touch with Jack Kucinski, Cenny Taslim, or Genevieve Kendall.
+
+Zenodo: https://doi.org/10.5281/zenodo.15391919
